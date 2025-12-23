@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check admin privileges
+    function isAuthorizedAdmin() {
+      return request.auth != null && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) || 
+        exists(/databases/$(database)/documents/adminStores/$(request.auth.uid + '_default')) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    // =========================================================================
+    // 1. PUBLIC DATA (공개 데이터)
+    // =========================================================================
+    
+    // 상점 정보
+    match /stores/{storeId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+      
+      // 메뉴
+      match /menus/{menuId} {
+        allow read: if true;
+        allow write: if isAuthorizedAdmin();
+      }
+      
+      // 공지사항
+      match /notices/{noticeId} {
+        allow read: if true;
+        allow write: if isAuthorizedAdmin();
+      }
+      
+      // 이벤트
+      match /events/{eventId} {
+        allow read: if true;
+        allow write: if isAuthorizedAdmin();
+      }
+      
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+        allow update, delete: if isAuthorizedAdmin() || (request.auth != null && resource.data.userId == request.auth.uid);
+      }
+      
+      // 주문 (본인만)
+      match /orders/{orderId} {
+         allow read: if request.auth != null && (resource.data.userId == request.auth.uid || isAuthorizedAdmin());
+         allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+         allow update: if isAuthorizedAdmin() || (
+           request.auth != null && 
+           resource.data.userId == request.auth.uid && 
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reviewed', 'reviewText', 'reviewRating', 'reviewedAt', 'updatedAt'])
+         );
+         allow delete: if isAuthorizedAdmin(); // 삭제 기능 추가
+      }
+      
+      // 쿠폰 (읽기는 공개, 생성/삭제는 관리자, 수정은 사용 처리 위해 로그인 유저 허용)
+      match /coupons/{couponId} {
+        allow read: if true;
+        allow create, delete: if isAuthorizedAdmin();
+        allow update: if isAuthorizedAdmin() || request.auth != null;
+      }
+    }
+
+    // =========================================================================
+    // 2. USER DATA (사용자 데이터)
+    // =========================================================================
+    
+    // 사용자 프로필
+    match /users/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAuthorizedAdmin());
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // 시스템 관리자 목록
+    match /admins/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // 관리자-상점 매핑
+    match /adminStores/{docId} {
+      allow read: if request.auth != null && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false;
+    }
+
+    // =========================================================================
+    // 3. SYSTEM ADMIN (시스템 관리자)
+    // =========================================================================
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

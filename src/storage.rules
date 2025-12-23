@@ -1,0 +1,101 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // 헬퍼 함수들
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    function isImageFile() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    function isSizeValid() {
+      // 최대 5MB
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+    
+    // 메뉴 이미지
+    match /menus/{menuId}/{fileName} {
+      // 읽기: 로그인한 사용자
+      allow read: if isAuthenticated();
+      
+      // 업로드: 관리자만, 이미지 파일, 5MB 이하
+      allow write: if isAdmin() && 
+                     isImageFile() && 
+                     isSizeValid();
+                     
+      // 삭제: 관리자만
+      allow delete: if isAdmin();
+    }
+    
+    // 프로필 이미지
+    match /profiles/{userId}/{fileName} {
+      // 읽기: 로그인한 사용자
+      allow read: if isAuthenticated();
+      
+      // 업로드: 본인만, 이미지 파일, 5MB 이하
+      allow write: if isAuthenticated() && 
+                     request.auth.uid == userId &&
+                     isImageFile() && 
+                     isSizeValid();
+                     
+      // 삭제: 본인 또는 관리자
+      allow delete: if isAuthenticated() && 
+                      (request.auth.uid == userId || isAdmin());
+    }
+    
+    // 리뷰 이미지 (선택적)
+    match /reviews/{reviewId}/{fileName} {
+      // 읽기: 로그인한 사용자
+      allow read: if isAuthenticated();
+      
+      // 업로드: 로그인한 사용자, 이미지 파일, 5MB 이하
+      allow write: if isAuthenticated() && 
+                     isImageFile() && 
+                     isSizeValid();
+                     
+      // 삭제: 업로더 본인 또는 관리자 (추가 검증 필요)
+      allow delete: if isAdmin();
+    }
+    
+    // 이벤트 배너 이미지
+    match /events/{eventId}/{fileName} {
+      // 읽기: 로그인한 사용자
+      allow read: if isAuthenticated();
+      
+      // 업로드: 관리자만, 이미지 파일, 5MB 이하
+      allow write: if isAdmin() && 
+                     isImageFile() && 
+                     isSizeValid();
+                     
+      // 삭제: 관리자만
+      allow delete: if isAdmin();
+    }
+    
+    // 공지사항 이미지 (선택적)
+    match /notices/{noticeId}/{fileName} {
+      // 읽기: 로그인한 사용자
+      allow read: if isAuthenticated();
+      
+      // 업로드: 관리자만, 이미지 파일, 5MB 이하
+      allow write: if isAdmin() && 
+                     isImageFile() && 
+                     isSizeValid();
+                     
+      // 삭제: 관리자만
+      allow delete: if isAdmin();
+    }
+    
+    // 기본적으로 모든 다른 파일은 거부
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

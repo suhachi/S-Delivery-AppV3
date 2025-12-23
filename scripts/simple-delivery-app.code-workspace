@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../../../projects/my-pho-app"
+		},
+		{
+			"path": "../../../../projects/my-pho-app/my-pho-app"
+		}
+	],
+	"settings": {}
+}

@@ -1,0 +1,39 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 기본적으로 모든 읽기/쓰기 거부
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // 상점 이미지 (로고, 배너) - 읽기: 모두, 쓰기: 인증된 사용자
+    match /store/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // 메뉴 이미지 - 읽기: 모두, 쓰기: 인증된 사용자
+    match /menus/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // 이벤트 이미지 - 읽기: 모두, 쓰기: 인증된 사용자
+    match /events/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // 리뷰 이미지 - 읽기: 모두, 쓰기: 인증된 사용자
+    match /reviews/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // 프로필 이미지 - 읽기: 모두, 쓰기: 본인만 (간소화를 위해 인증된 사용자 허용)
+    match /profiles/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
