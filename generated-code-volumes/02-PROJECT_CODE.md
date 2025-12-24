@@ -1,114 +1,10 @@
 ﻿# Project Code Volume 02
 
-Generated: 2025-12-23 14:30:55
+Generated: 2025-12-24 14:30:56
 Root: D:\projectsing\S-Delivery-AppV3\
 
-- Files in volume: 18
-- Approx size: 0.07 MB
-
----
-
-## File: firestore.rules
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    
-    // Helper function to check admin privileges
-    function isAuthorizedAdmin() {
-      return request.auth != null && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) || 
-        exists(/databases/$(database)/documents/adminStores/$(request.auth.uid + '_default')) ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
-    }
-
-    // =========================================================================
-    // 1. PUBLIC DATA (공개 데이터)
-    // =========================================================================
-    
-    // 상점 정보
-    match /stores/{storeId} {
-      allow read: if true;
-      allow write: if isAuthorizedAdmin();
-      
-      // 메뉴
-      match /menus/{menuId} {
-        allow read: if true;
-        allow write: if isAuthorizedAdmin();
-      }
-      
-      // 공지사항
-      match /notices/{noticeId} {
-        allow read: if true;
-        allow write: if isAuthorizedAdmin();
-      }
-      
-      // 이벤트
-      match /events/{eventId} {
-        allow read: if true;
-        allow write: if isAuthorizedAdmin();
-      }
-      
-      match /reviews/{reviewId} {
-        allow read: if true;
-        allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-        allow update, delete: if isAuthorizedAdmin() || (request.auth != null && resource.data.userId == request.auth.uid);
-      }
-      
-      // 주문 (본인만)
-      match /orders/{orderId} {
-         allow read: if request.auth != null && (resource.data.userId == request.auth.uid || isAuthorizedAdmin());
-         allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-         allow update: if isAuthorizedAdmin() || (
-           request.auth != null && 
-           resource.data.userId == request.auth.uid && 
-           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reviewed', 'reviewText', 'reviewRating', 'reviewedAt', 'updatedAt'])
-         );
-         allow delete: if isAuthorizedAdmin(); // 삭제 기능 추가
-      }
-      
-      // 쿠폰 (읽기는 공개, 생성/삭제는 관리자, 수정은 사용 처리 위해 로그인 유저 허용)
-      match /coupons/{couponId} {
-        allow read: if true;
-        allow create, delete: if isAuthorizedAdmin();
-        allow update: if isAuthorizedAdmin() || request.auth != null;
-      }
-    }
-
-    // =========================================================================
-    // 2. USER DATA (사용자 데이터)
-    // =========================================================================
-    
-    // 사용자 프로필
-    match /users/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isAuthorizedAdmin());
-      allow write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // 시스템 관리자 목록
-    match /admins/{userId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // 관리자-상점 매핑
-    match /adminStores/{docId} {
-      allow read: if request.auth != null && docId.matches('^' + request.auth.uid + '_.*');
-      allow write: if false;
-    }
-
-    // =========================================================================
-    // 3. SYSTEM ADMIN (시스템 관리자)
-    // =========================================================================
-    
-    match /{document=**} {
-      allow read, write: if false;
-    }
-  }
-}
-
-```
+- Files in volume: 20
+- Approx size: 0.08 MB
 
 ---
 
@@ -163,1387 +59,1145 @@ reset();
 
 ---
 
-## File: src\components\common\ImageUpload.tsx
+## File: scripts\generate-project-code-volumes.ps1
 
-```typescript
-import { useState, useRef } from 'react';
-import { Upload, X, Image as ImageIcon } from 'lucide-react';
-import { uploadMenuImage, validateImageFile } from '../../services/storageService';
-import { toast } from 'sonner';
+```powershell
+# Generate ~10 Markdown volumes containing the project's source code
+# Windows PowerShell 5.1 compatible
 
-interface ImageUploadProps {
-  label?: string;
-  currentImageUrl?: string;
-  onImageUploaded: (url: string) => void;
-  // Optional specific props
-  menuId?: string;
-  onUpload?: (file: File, onProgress: (progress: number) => void) => Promise<string>;
-  aspectRatio?: 'square' | 'wide' | 'standard'; // square=1:1, wide=16:9, standard=4:3
-  circle?: boolean; // For profile/logo images
-  defaultImage?: string; // Fallback or initial image
+param(
+    [string]$RootPath = (Get-Location).Path,
+    [int]$VolumeCount = 10,
+    [string]$OutputFolder = "generated-code-volumes",
+    [string[]]$ExcludeDirs = @(
+        "node_modules","dist","build",".git",".vscode",".pnpm-store",
+        "coverage",".cache",".next","out","generated-code-docs","project-code-docs","docs"
+    ),
+    [switch]$IncludeDocs,
+    [switch]$IncludeLocks
+)
+
+$ErrorActionPreference = "Stop"
+
+# Normalize root path to have trailing backslash
+if (-not $RootPath.EndsWith('\')) { $RootPath = $RootPath + '\' }
+
+Write-Host "Generating $VolumeCount Markdown volumes with project code..." -ForegroundColor Green
+Write-Host "Root: $RootPath" -ForegroundColor Cyan
+
+# Extensions to include
+$includeExts = @(
+    ".ts", ".tsx", ".js", ".jsx",
+    ".cjs", ".mjs",
+    ".json", ".html",
+    ".css", ".scss", ".less",
+    ".ps1", ".psm1", ".psd1",
+    ".yaml", ".yml",
+    ".rules"
+)
+if ($IncludeDocs) { $includeExts += ".md" }
+
+# Binary extensions to exclude from markdown
+$excludeBinaryExts = @(
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tiff",
+    ".woff", ".woff2", ".ttf", ".eot",
+    ".mp4", ".mp3", ".webm"
+)
+
+# Names to exclude explicitly (huge or non-source files)
+$excludeFilesByName = @()
+if (-not $IncludeLocks) {
+    $excludeFilesByName += @("pnpm-lock.yaml", "yarn.lock", "package-lock.json")
 }
 
-export default function ImageUpload({
-  label = '이미지',
-  currentImageUrl,
-  onImageUploaded,
-  menuId,
-  onUpload,
-  aspectRatio = 'standard',
-  circle = false,
-  defaultImage
-}: ImageUploadProps) {
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState<string | undefined>(currentImageUrl || defaultImage);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const getAspectRatioClass = () => {
-    if (circle) return 'aspect-square rounded-full';
-    switch (aspectRatio) {
-      case 'square': return 'aspect-square rounded-lg';
-      case 'wide': return 'aspect-[16/9] rounded-lg';
-      case 'standard': default: return 'aspect-[4/3] rounded-lg';
+function Get-LanguageFromExtension([string]$ext) {
+    switch ($ext.ToLower()) {
+        ".ts"   { "typescript" }
+        ".tsx"  { "typescript" }
+        ".js"   { "javascript" }
+        ".jsx"  { "javascript" }
+        ".cjs"  { "javascript" }
+        ".mjs"  { "javascript" }
+        ".json" { "json" }
+        ".html" { "html" }
+        ".css"  { "css" }
+        ".scss" { "scss" }
+        ".less" { "less" }
+        ".ps1"  { "powershell" }
+        ".psm1" { "powershell" }
+        ".psd1" { "powershell" }
+        ".yaml" { "yaml" }
+        ".yml"  { "yaml" }
+        ".rules" { "" }
+        ".md"   { "markdown" }
+        default  { "" }
     }
-  };
+}
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+# Collect files (text code files)
+$files = Get-ChildItem -Path $RootPath -Recurse -File |
+    Where-Object {
+        # Exclude directories
+        $excludeHit = $false
+        foreach ($dir in $ExcludeDirs) {
+            if ($_.FullName -match "\\$([regex]::Escape($dir))(\\|$)") { $excludeHit = $true; break }
+        }
+        if ($excludeHit) { return $false }
+        # Include only selected extensions and exclude binaries
+        ($includeExts -contains $_.Extension.ToLower()) -and -not ($excludeBinaryExts -contains $_.Extension.ToLower())
+    } |
+    Where-Object { $excludeFilesByName -notcontains $_.Name } |
+    Sort-Object FullName
 
-    // 파일 유효성 검사
-    const validation = validateImageFile(file);
-    if (!validation.valid) {
-      toast.error(validation.error);
-      return;
+if ($files.Count -eq 0) {
+    Write-Host "No files found for inclusion." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Found $($files.Count) files to include." -ForegroundColor Yellow
+
+# Ensure output folder fresh
+if (Test-Path $OutputFolder) {
+    Remove-Item $OutputFolder -Recurse -Force
+}
+New-Item -ItemType Directory -Path $OutputFolder | Out-Null
+
+# Prepare volume containers with greedy size balancing (bin packing heuristic)
+$volumes = @()
+for ($i = 1; $i -le $VolumeCount; $i++) {
+    $volumes += [PSCustomObject]@{ Index = $i; Files = New-Object System.Collections.Generic.List[object]; Size = [long]0 }
+}
+
+# Sort files by size descending for better balancing
+$filesInfo = $files | Select-Object FullName, Length, Extension
+$filesSorted = $filesInfo | Sort-Object Length -Descending
+
+foreach ($f in $filesSorted) {
+    # pick the volume with the smallest current size
+    $minIdx = 0
+    $minSize = [long]::MaxValue
+    for ($i = 0; $i -lt $volumes.Count; $i++) {
+        if ($volumes[$i].Size -lt $minSize) { $minSize = $volumes[$i].Size; $minIdx = $i }
+    }
+    $volumes[$minIdx].Files.Add($f)
+    $volumes[$minIdx].Size += [long]$f.Length
+}
+
+# Write each volume markdown
+$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+function Write-VolumeMarkdown($volume, $root, $outFolder) {
+    $indexStr = "{0:D2}" -f $volume.Index
+    $outFile = Join-Path $outFolder "$indexStr-PROJECT_CODE.md"
+    $md = New-Object System.Collections.Generic.List[string]
+
+    $md.Add("# Project Code Volume $indexStr")
+    $md.Add("")
+    $md.Add("Generated: $timestamp")
+    $md.Add("Root: $root")
+    $md.Add("")
+    $md.Add("- Files in volume: $($volume.Files.Count)")
+    $md.Add("- Approx size: $([Math]::Round($volume.Size / 1MB, 2)) MB")
+    $md.Add("")
+    $md.Add("---")
+    $md.Add("")
+
+    foreach ($fi in $volume.Files | Sort-Object FullName) {
+        $relative = $fi.FullName.Replace($root, "")
+        $lang = Get-LanguageFromExtension $fi.Extension
+        $md.Add("## File: $relative")
+        $md.Add("")
+        try {
+            $content = Get-Content -Path $fi.FullName -Raw -Encoding UTF8
+            $md.Add('```' + $lang)
+            $md.Add($content)
+            $md.Add('```')
+        } catch {
+            $md.Add("Warning: Cannot read file - $($_.Exception.Message)")
+        }
+        $md.Add("")
+        $md.Add("---")
+        $md.Add("")
     }
 
-    // 미리보기 생성
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setPreviewUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    $md | Out-File -FilePath $outFile -Encoding UTF8
+    Write-Host "Created: $outFile" -ForegroundColor Green
+}
 
-    // 업로드 실행
-    setUploading(true);
-    try {
-      let downloadURL = '';
+foreach ($v in $volumes) {
+    Write-VolumeMarkdown -volume $v -root $RootPath -outFolder $OutputFolder
+}
 
-      if (onUpload) {
-        // 커스텀 업로드 함수 사용
-        downloadURL = await onUpload(file, (p) => setProgress(p));
-      } else if (menuId) {
-        // 기존 메뉴 이미지 업로드 (하위 호환)
-        downloadURL = await uploadMenuImage(file, menuId, (p) => setProgress(p));
-      } else {
-        throw new Error('Upload handler is missing');
-      }
+# Write index file
+$indexMd = New-Object System.Collections.Generic.List[string]
+$indexMd.Add("# Project Code Volumes Index")
+$indexMd.Add("")
+$indexMd.Add("Generated: $timestamp")
+$indexMd.Add("Root: $RootPath")
+$indexMd.Add("")
+$indexMd.Add("## Volumes")
+$indexMd.Add("")
+foreach ($v in ($volumes | Sort-Object Index)) {
+    $indexStr = "{0:D2}" -f $v.Index
+    $indexMd.Add("- [$indexStr-PROJECT_CODE.md](./$indexStr-PROJECT_CODE.md) — Files: $($v.Files.Count), Size: $([Math]::Round($v.Size / 1MB, 2)) MB")
+}
+$indexMd.Add("")
+$indexMd.Add("## Totals")
+$indexMd.Add("")
+$totalFiles = ($volumes | ForEach-Object { $_.Files.Count } | Measure-Object -Sum).Sum
+$totalSize = ($volumes | ForEach-Object { $_.Size } | Measure-Object -Sum).Sum
+$indexMd.Add("- Total Files: $totalFiles")
+$indexMd.Add("- Total Size: $([Math]::Round($totalSize / 1MB, 2)) MB")
+$indexMd.Add("- Volume Count: $VolumeCount")
 
-      onImageUploaded(downloadURL);
-      toast.success('이미지가 업로드되었습니다');
-    } catch (error) {
-      console.error('이미지 업로드 실패:', error);
-      toast.error('이미지 업로드에 실패했습니다');
-      setPreviewUrl(currentImageUrl || defaultImage);
-    } finally {
-      setUploading(false);
-      setProgress(0);
-    }
-  };
+$indexFile = Join-Path $OutputFolder "00-INDEX.md"
+$indexMd | Out-File -FilePath $indexFile -Encoding UTF8
+Write-Host "Index written: $indexFile" -ForegroundColor Cyan
 
-  const handleRemoveImage = () => {
-    setPreviewUrl(undefined);
-    onImageUploaded('');
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
+Write-Host "All volumes generated in folder: $OutputFolder" -ForegroundColor Cyan
 
+```
+
+---
+
+## File: src\components\menu\CategoryBar.tsx
+
+```typescript
+import { CATEGORIES, Category } from '../../types/menu';
+
+interface CategoryBarProps {
+  selected: string;
+  onSelect: (category: string) => void;
+}
+
+export default function CategoryBar({ selected, onSelect }: CategoryBarProps) {
+  const allCategories = ['전체', ...CATEGORIES];
+  
   return (
-    <div>
-      {label && (
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          {label}
-        </label>
-      )}
-
-      <div className="relative w-full">
-        {previewUrl ? (
-          <div className={`relative overflow-hidden bg-gray-100 border-2 border-gray-200 ${getAspectRatioClass()}`}>
-            <img
-              src={previewUrl}
-              alt="미리보기"
-              className="w-full h-full object-cover"
-            />
-            {uploading && (
-              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <div className="text-white text-center">
-                  <div className="w-16 h-16 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                  <p>{Math.round(progress)}%</p>
-                </div>
-              </div>
-            )}
-            {!uploading && (
+    <div className="sticky top-16 z-40 bg-white border-b border-gray-200 shadow-sm">
+      <div className="container mx-auto px-4 py-3">
+        {/* 스크롤 힌트를 위한 그라데이션 오버레이 */}
+        <div className="relative">
+          {/* 오른쪽 그라데이션 (더 많은 항목이 있음을 표시) */}
+          <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10 md:hidden"></div>
+          
+          {/* 카테고리 버튼들 */}
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
+            {allCategories.map((category) => (
               <button
-                type="button"
-                onClick={handleRemoveImage}
-                className="absolute top-2 right-2 p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors shadow-md transform hover:scale-105"
+                key={category}
+                onClick={() => onSelect(category)}
+                className={`
+                  px-4 py-2 rounded-lg whitespace-nowrap transition-all duration-200 flex-shrink-0
+                  ${
+                    selected === category
+                      ? 'gradient-primary text-white shadow-md scale-105'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }
+                `}
               >
-                <X className="w-4 h-4" />
+                {category}
               </button>
-            )}
+            ))}
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className={`w-full border-2 border-dashed border-gray-300 hover:border-blue-500 transition-colors flex flex-col items-center justify-center text-gray-500 hover:text-blue-600 bg-gray-50 hover:bg-blue-50 ${getAspectRatioClass()}`}
-          >
-            <ImageIcon className="w-10 h-10 mb-2 opacity-50" />
-            <p className="text-sm font-medium">이미지 업로드</p>
-            <p className="text-xs mt-1 text-gray-400">JPG, PNG, WebP (최대 5MB)</p>
-          </button>
-        )}
+        </div>
       </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/jpg,image/png,image/webp"
-        onChange={handleFileSelect}
-        className="hidden"
-      />
     </div>
   );
 }
-
 ```
 
 ---
 
-## File: src\components\common\TopBar.tsx
+## File: src\components\menu\MenuCard.tsx
 
 ```typescript
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ShoppingCart, LogOut, User, Store, Menu, X, Bell, Gift, MessageSquare } from 'lucide-react';
-import { toast } from 'sonner';
-import { useAuth } from '../../contexts/AuthContext';
+import { Plus, ShoppingCart } from 'lucide-react';
+import { Menu } from '../../types/menu';
 import { useCart } from '../../contexts/CartContext';
-import { useStore } from '../../contexts/StoreContext';
+import { toast } from 'sonner';
+import Card from '../common/Card';
+import Badge from '../common/Badge';
+import Button from '../common/Button';
+import MenuDetailModal from './MenuDetailModal';
 
-export default function TopBar() {
-  const navigate = useNavigate();
-  const { user, isAdmin, logout } = useAuth();
-  const { store } = useStore();
-  const { getTotalItems } = useCart();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const cartItemsCount = getTotalItems();
-
-  const handleLogout = async () => {
-    await logout();
-    toast.success('로그아웃되었습니다');
-    navigate('/');
-  };
-
-  return (
-    <nav className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
-      <div className="container mx-auto">
-        <div className="flex items-center justify-between h-16">
-          {/* Logo */}
-          <Link to="/" className="flex items-center space-x-2 group">
-            {store?.logoUrl ? (
-              <img
-                src={store.logoUrl}
-                alt={store.name}
-                className="w-10 h-10 rounded-xl object-cover border border-gray-100 shadow-sm transform group-hover:scale-105 transition-transform"
-              />
-            ) : (
-              <div className="w-10 h-10 gradient-primary rounded-xl flex items-center justify-center transform group-hover:scale-105 transition-transform">
-                <span className="text-white text-xl">🍜</span>
-              </div>
-            )}
-            <span className="text-lg font-bold text-primary-600 max-w-[160px] leading-tight text-left line-clamp-2">
-              {store?.name || '배달앱'}
-            </span>
-          </Link>
-
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-1">
-            <NavLink to="/menu" icon={null}>메뉴</NavLink>
-            <NavLink to="/events" icon={<Gift className="w-4 h-4" />}>이벤트</NavLink>
-            <NavLink to="/reviews" icon={<MessageSquare className="w-4 h-4" />}>리뷰 게시판</NavLink>
-            <NavLink to="/notices" icon={<Bell className="w-4 h-4" />}>공지사항</NavLink>
-            <NavLink to="/orders" icon={null}>내 주문</NavLink>
-            <NavLink to="/cart" icon={<ShoppingCart className="w-4 h-4" />} badge={cartItemsCount}>
-              장바구니
-            </NavLink>
-            <NavLink to="/mypage" icon={<User className="w-4 h-4" />}>마이페이지</NavLink>
-            {isAdmin && (
-              <NavLink to="/admin" icon={<Store className="w-4 h-4" />}>
-                관리자
-              </NavLink>
-            )}
-          </div>
-
-          {/* User Actions */}
-          <div className="hidden md:flex items-center space-x-3">
-            <div className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 rounded-full">
-              <User className="w-4 h-4 text-gray-600" />
-              <span className="text-sm text-gray-700">{user?.displayName || user?.email}</span>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="flex items-center space-x-2 px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="text-sm">로그아웃</span>
-            </button>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-          >
-            {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
-        </div>
-
-        {/* Mobile Menu */}
-        {mobileMenuOpen && (
-          <div className="md:hidden py-4 space-y-2 border-t border-gray-200 animate-slide-up">
-            <MobileNavLink to="/menu" onClick={() => setMobileMenuOpen(false)}>
-              메뉴
-            </MobileNavLink>
-            <MobileNavLink to="/events" onClick={() => setMobileMenuOpen(false)}>
-              이벤트
-            </MobileNavLink>
-            <MobileNavLink to="/reviews" onClick={() => setMobileMenuOpen(false)}>
-              리뷰 게시판
-            </MobileNavLink>
-            <MobileNavLink to="/notices" onClick={() => setMobileMenuOpen(false)}>
-              공지사항
-            </MobileNavLink>
-            <MobileNavLink to="/orders" onClick={() => setMobileMenuOpen(false)}>
-              내 주문
-            </MobileNavLink>
-            <MobileNavLink to="/cart" onClick={() => setMobileMenuOpen(false)} badge={cartItemsCount}>
-              장바구니
-            </MobileNavLink>
-            <MobileNavLink to="/mypage" onClick={() => setMobileMenuOpen(false)}>
-              마이페이지
-            </MobileNavLink>
-            {isAdmin && (
-              <MobileNavLink to="/admin" onClick={() => setMobileMenuOpen(false)}>
-                관리자
-              </MobileNavLink>
-            )}
-          </div>
-        )}
-      </div>
-    </nav>
-  );
+interface MenuCardProps {
+  menu: Menu;
 }
 
-function NavLink({ to, icon, badge, children }: { to: string; icon?: React.ReactNode; badge?: number; children: React.ReactNode }) {
-  return (
-    <Link
-      to={to}
-      className="relative flex items-center space-x-1 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors whitespace-nowrap"
-    >
-      {icon}
-      <span>{children}</span>
-      {badge !== undefined && badge > 0 && (
-        <span className="absolute -top-1 -right-1 flex items-center justify-center w-4 h-4 text-[10px] text-white gradient-primary rounded-full">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </Link>
-  );
-}
-
-function MobileNavLink({ to, badge, onClick, children }: { to: string; badge?: number; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <Link
-      to={to}
-      onClick={onClick}
-      className="relative flex items-center justify-between px-4 py-3 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-    >
-      <span>{children}</span>
-      {badge !== undefined && badge > 0 && (
-        <span className="flex items-center justify-center min-w-[24px] h-6 px-2 text-xs text-white gradient-primary rounded-full">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </Link>
-  );
-}
-```
-
----
-
-## File: src\components\ui\alert-dialog.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog@1.1.6";
-
-import { cn } from "./utils";
-import { buttonVariants } from "./button";
-
-function AlertDialog({
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
-}
-
-function AlertDialogTrigger({
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Trigger>) {
-  return (
-    <AlertDialogPrimitive.Trigger data-slot="alert-dialog-trigger" {...props} />
-  );
-}
-
-function AlertDialogPortal({
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
-  return (
-    <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />
-  );
-}
-
-function AlertDialogOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>) {
-  return (
-    <AlertDialogPrimitive.Overlay
-      data-slot="alert-dialog-overlay"
-      className={cn(
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogContent({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
-  return (
-    <AlertDialogPortal>
-      <AlertDialogOverlay />
-      <AlertDialogPrimitive.Content
-        data-slot="alert-dialog-content"
-        className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
-          className,
-        )}
-        {...props}
-      />
-    </AlertDialogPortal>
-  );
-}
-
-function AlertDialogHeader({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-dialog-header"
-      className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogFooter({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-dialog-footer"
-      className={cn(
-        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogTitle({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Title>) {
-  return (
-    <AlertDialogPrimitive.Title
-      data-slot="alert-dialog-title"
-      className={cn("text-lg font-semibold", className)}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogDescription({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Description>) {
-  return (
-    <AlertDialogPrimitive.Description
-      data-slot="alert-dialog-description"
-      className={cn("text-muted-foreground text-sm", className)}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogAction({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Action>) {
-  return (
-    <AlertDialogPrimitive.Action
-      className={cn(buttonVariants(), className)}
-      {...props}
-    />
-  );
-}
-
-function AlertDialogCancel({
-  className,
-  ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Cancel>) {
-  return (
-    <AlertDialogPrimitive.Cancel
-      className={cn(buttonVariants({ variant: "outline" }), className)}
-      {...props}
-    />
-  );
-}
-
-export {
-  AlertDialog,
-  AlertDialogPortal,
-  AlertDialogOverlay,
-  AlertDialogTrigger,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogFooter,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogAction,
-  AlertDialogCancel,
-};
-
-```
-
----
-
-## File: src\components\ui\breadcrumb.tsx
-
-```typescript
-import * as React from "react";
-import { Slot } from "@radix-ui/react-slot@1.1.2";
-import { ChevronRight, MoreHorizontal } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-
-function Breadcrumb({ ...props }: React.ComponentProps<"nav">) {
-  return <nav aria-label="breadcrumb" data-slot="breadcrumb" {...props} />;
-}
-
-function BreadcrumbList({ className, ...props }: React.ComponentProps<"ol">) {
-  return (
-    <ol
-      data-slot="breadcrumb-list"
-      className={cn(
-        "text-muted-foreground flex flex-wrap items-center gap-1.5 text-sm break-words sm:gap-2.5",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
-  return (
-    <li
-      data-slot="breadcrumb-item"
-      className={cn("inline-flex items-center gap-1.5", className)}
-      {...props}
-    />
-  );
-}
-
-function BreadcrumbLink({
-  asChild,
-  className,
-  ...props
-}: React.ComponentProps<"a"> & {
-  asChild?: boolean;
-}) {
-  const Comp = asChild ? Slot : "a";
-
-  return (
-    <Comp
-      data-slot="breadcrumb-link"
-      className={cn("hover:text-foreground transition-colors", className)}
-      {...props}
-    />
-  );
-}
-
-function BreadcrumbPage({ className, ...props }: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="breadcrumb-page"
-      role="link"
-      aria-disabled="true"
-      aria-current="page"
-      className={cn("text-foreground font-normal", className)}
-      {...props}
-    />
-  );
-}
-
-function BreadcrumbSeparator({
-  children,
-  className,
-  ...props
-}: React.ComponentProps<"li">) {
-  return (
-    <li
-      data-slot="breadcrumb-separator"
-      role="presentation"
-      aria-hidden="true"
-      className={cn("[&>svg]:size-3.5", className)}
-      {...props}
-    >
-      {children ?? <ChevronRight />}
-    </li>
-  );
-}
-
-function BreadcrumbEllipsis({
-  className,
-  ...props
-}: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="breadcrumb-ellipsis"
-      role="presentation"
-      aria-hidden="true"
-      className={cn("flex size-9 items-center justify-center", className)}
-      {...props}
-    >
-      <MoreHorizontal className="size-4" />
-      <span className="sr-only">More</span>
-    </span>
-  );
-}
-
-export {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-  BreadcrumbEllipsis,
-};
-
-```
-
----
-
-## File: src\components\ui\card.tsx
-
-```typescript
-import * as React from "react";
-
-import { cn } from "./utils";
-
-function Card({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card"
-      className={cn(
-        "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-header"
-      className={cn(
-        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-1.5 px-6 pt-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <h4
-      data-slot="card-title"
-      className={cn("leading-none", className)}
-      {...props}
-    />
-  );
-}
-
-function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <p
-      data-slot="card-description"
-      className={cn("text-muted-foreground", className)}
-      {...props}
-    />
-  );
-}
-
-function CardAction({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-action"
-      className={cn(
-        "col-start-2 row-span-2 row-start-1 self-start justify-self-end",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CardContent({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-content"
-      className={cn("px-6 [&:last-child]:pb-6", className)}
-      {...props}
-    />
-  );
-}
-
-function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-footer"
-      className={cn("flex items-center px-6 pb-6 [.border-t]:pt-6", className)}
-      {...props}
-    />
-  );
-}
-
-export {
-  Card,
-  CardHeader,
-  CardFooter,
-  CardTitle,
-  CardAction,
-  CardDescription,
-  CardContent,
-};
-
-```
-
----
-
-## File: src\components\ui\dropdown-menu.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu@2.1.6";
-import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-
-function DropdownMenu({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
-}
-
-function DropdownMenuPortal({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
-  return (
-    <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />
-  );
-}
-
-function DropdownMenuTrigger({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
-  return (
-    <DropdownMenuPrimitive.Trigger
-      data-slot="dropdown-menu-trigger"
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuContent({
-  className,
-  sideOffset = 4,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
-  return (
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content
-        data-slot="dropdown-menu-content"
-        sideOffset={sideOffset}
-        className={cn(
-          "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md",
-          className,
-        )}
-        {...props}
-      />
-    </DropdownMenuPrimitive.Portal>
-  );
-}
-
-function DropdownMenuGroup({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
-  return (
-    <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />
-  );
-}
-
-function DropdownMenuItem({
-  className,
-  inset,
-  variant = "default",
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
-  inset?: boolean;
-  variant?: "default" | "destructive";
-}) {
-  return (
-    <DropdownMenuPrimitive.Item
-      data-slot="dropdown-menu-item"
-      data-inset={inset}
-      data-variant={variant}
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuCheckboxItem({
-  className,
-  children,
-  checked,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
-  return (
-    <DropdownMenuPrimitive.CheckboxItem
-      data-slot="dropdown-menu-checkbox-item"
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-2 pl-8 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      checked={checked}
-      {...props}
-    >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
-        <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon className="size-4" />
-        </DropdownMenuPrimitive.ItemIndicator>
-      </span>
-      {children}
-    </DropdownMenuPrimitive.CheckboxItem>
-  );
-}
-
-function DropdownMenuRadioGroup({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
-  return (
-    <DropdownMenuPrimitive.RadioGroup
-      data-slot="dropdown-menu-radio-group"
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuRadioItem({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
-  return (
-    <DropdownMenuPrimitive.RadioItem
-      data-slot="dropdown-menu-radio-item"
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-2 pl-8 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
-        <DropdownMenuPrimitive.ItemIndicator>
-          <CircleIcon className="size-2 fill-current" />
-        </DropdownMenuPrimitive.ItemIndicator>
-      </span>
-      {children}
-    </DropdownMenuPrimitive.RadioItem>
-  );
-}
-
-function DropdownMenuLabel({
-  className,
-  inset,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
-  inset?: boolean;
-}) {
-  return (
-    <DropdownMenuPrimitive.Label
-      data-slot="dropdown-menu-label"
-      data-inset={inset}
-      className={cn(
-        "px-2 py-1.5 text-sm font-medium data-[inset]:pl-8",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuSeparator({
-  className,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
-  return (
-    <DropdownMenuPrimitive.Separator
-      data-slot="dropdown-menu-separator"
-      className={cn("bg-border -mx-1 my-1 h-px", className)}
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuShortcut({
-  className,
-  ...props
-}: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="dropdown-menu-shortcut"
-      className={cn(
-        "text-muted-foreground ml-auto text-xs tracking-widest",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function DropdownMenuSub({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
-  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />;
-}
-
-function DropdownMenuSubTrigger({
-  className,
-  inset,
-  children,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
-  inset?: boolean;
-}) {
-  return (
-    <DropdownMenuPrimitive.SubTrigger
-      data-slot="dropdown-menu-sub-trigger"
-      data-inset={inset}
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[inset]:pl-8",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      <ChevronRightIcon className="ml-auto size-4" />
-    </DropdownMenuPrimitive.SubTrigger>
-  );
-}
-
-function DropdownMenuSubContent({
-  className,
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
-  return (
-    <DropdownMenuPrimitive.SubContent
-      data-slot="dropdown-menu-sub-content"
-      className={cn(
-        "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-md border p-1 shadow-lg",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export {
-  DropdownMenu,
-  DropdownMenuPortal,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
-};
-
-```
-
----
-
-## File: src\components\ui\radio-group.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as RadioGroupPrimitive from "@radix-ui/react-radio-group@1.2.3";
-import { CircleIcon } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-
-function RadioGroup({
-  className,
-  ...props
-}: React.ComponentProps<typeof RadioGroupPrimitive.Root>) {
-  return (
-    <RadioGroupPrimitive.Root
-      data-slot="radio-group"
-      className={cn("grid gap-3", className)}
-      {...props}
-    />
-  );
-}
-
-function RadioGroupItem({
-  className,
-  ...props
-}: React.ComponentProps<typeof RadioGroupPrimitive.Item>) {
-  return (
-    <RadioGroupPrimitive.Item
-      data-slot="radio-group-item"
-      className={cn(
-        "border-input text-primary focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 aspect-square size-4 shrink-0 rounded-full border shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    >
-      <RadioGroupPrimitive.Indicator
-        data-slot="radio-group-indicator"
-        className="relative flex items-center justify-center"
-      >
-        <CircleIcon className="fill-primary absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2" />
-      </RadioGroupPrimitive.Indicator>
-    </RadioGroupPrimitive.Item>
-  );
-}
-
-export { RadioGroup, RadioGroupItem };
-
-```
-
----
-
-## File: src\components\ui\skeleton.tsx
-
-```typescript
-import { cn } from "./utils";
-
-function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="skeleton"
-      className={cn("bg-accent animate-pulse rounded-md", className)}
-      {...props}
-    />
-  );
-}
-
-export { Skeleton };
-
-```
-
----
-
-## File: src\components\ui\use-mobile.ts
-
-```typescript
-import * as React from "react";
-
-const MOBILE_BREAKPOINT = 768;
-
-export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(
-    undefined,
-  );
-
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    };
-    mql.addEventListener("change", onChange);
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-
-  return !!isMobile;
-}
-
-```
-
----
-
-## File: src\contexts\CartContext.tsx
-
-```typescript
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { MenuOption } from '../types/menu';
-
-export interface CartItem {
-  id: string;
-  menuId: string;
-  name: string;
-  price: number;
-  quantity: number;
-  options?: MenuOption[];
-  imageUrl?: string;
-}
-
-interface CartContextType {
-  items: CartItem[];
-  addItem: (item: Omit<CartItem, 'id'>) => void;
-  removeItem: (id: string) => void;
-  updateQuantity: (id: string, quantity: number) => void;
-  clearCart: () => void;
-  getTotalPrice: () => number;
-  getTotalItems: () => number;
-}
-
-const CartContext = createContext<CartContextType | undefined>(undefined);
-
-export function CartProvider({ children }: { children: ReactNode }) {
-  const [items, setItems] = useState<CartItem[]>([]);
-
-  // Load cart from localStorage on mount
-  useEffect(() => {
-    const storedCart = localStorage.getItem('cart');
-    if (storedCart) {
-      setItems(JSON.parse(storedCart));
-    }
-  }, []);
-
-  // Save cart to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(items));
-  }, [items]);
-
-  const addItem = (item: Omit<CartItem, 'id'>) => {
-    const id = 'cart-' + Date.now() + '-' + Math.random();
-    setItems(prev => [...prev, { ...item, id }]);
-  };
-
-  const removeItem = (id: string) => {
-    setItems(prev => prev.filter(item => item.id !== id));
-  };
-
-  const updateQuantity = (id: string, quantity: number) => {
-    if (quantity <= 0) {
-      removeItem(id);
+export default function MenuCard({ menu }: MenuCardProps) {
+  const { addItem } = useCart();
+  const [showDetail, setShowDetail] = useState(false);
+
+  const handleQuickAdd = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (menu.soldout) {
+      toast.error('품절된 메뉴입니다');
       return;
     }
-    setItems(prev =>
-      prev.map(item => (item.id === id ? { ...item, quantity } : item))
-    );
-  };
 
-  const clearCart = () => {
-    setItems([]);
-  };
-
-  const getTotalPrice = () => {
-    return items.reduce((total, item) => {
-      const optionsPrice = item.options?.reduce((sum, opt) => sum + (opt.price * (opt.quantity || 1)), 0) || 0;
-      return total + (item.price + optionsPrice) * item.quantity;
-    }, 0);
-  };
-
-  const getTotalItems = () => {
-    return items.reduce((total, item) => total + item.quantity, 0);
+    if (menu.options && menu.options.length > 0) {
+      // 옵션이 있으면 상세 모달 열기
+      setShowDetail(true);
+    } else {
+      // 옵션이 없으면 바로 추가
+      addItem({
+        menuId: menu.id,
+        name: menu.name,
+        price: menu.price,
+        quantity: 1,
+        imageUrl: menu.imageUrl,
+      });
+      toast.success('장바구니에 추가되었습니다');
+    }
   };
 
   return (
-    <CartContext.Provider
-      value={{
-        items,
-        addItem,
-        removeItem,
-        updateQuantity,
-        clearCart,
-        getTotalPrice,
-        getTotalItems,
-      }}
-    >
-      {children}
-    </CartContext.Provider>
+    <>
+      <Card
+        hover
+        padding="none"
+        onClick={() => setShowDetail(true)}
+        className={`overflow-hidden ${menu.soldout ? 'opacity-60' : ''}`}
+      >
+        {/* Image */}
+        <div className="relative aspect-[4/3] overflow-hidden bg-gray-100 group">
+          {menu.imageUrl ? (
+            <img
+              src={menu.imageUrl}
+              alt={menu.name}
+              className="w-full h-full object-cover transform transition-all duration-500 group-hover:scale-110 group-hover:brightness-105"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-gray-400">
+              <span className="text-5xl">🍜</span>
+            </div>
+          )}
+
+          {/* Badges */}
+          <div className="absolute top-3 left-3 flex flex-wrap gap-1.5">
+            {menu.category.slice(0, 2).map((cat) => (
+              <Badge key={cat} variant="primary" size="sm">
+                {cat}
+              </Badge>
+            ))}
+          </div>
+
+          {menu.soldout && (
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+              <Badge variant="danger" size="lg">
+                품절
+              </Badge>
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="p-4">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1 line-clamp-1">
+            {menu.name}
+          </h3>
+
+          <p className="text-sm text-gray-600 mb-3 line-clamp-2">
+            {menu.description}
+          </p>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-2xl font-bold text-blue-600">
+                {menu.price.toLocaleString()}
+              </span>
+              <span className="text-sm text-gray-600 ml-1">원</span>
+            </div>
+
+            <Button
+              size="sm"
+              onClick={handleQuickAdd}
+              disabled={menu.soldout}
+              className="group"
+            >
+              <ShoppingCart className="w-4 h-4 mr-1.5" />
+              담기
+            </Button>
+          </div>
+
+          {menu.options && menu.options.length > 0 && (
+            <p className="mt-2 text-xs text-gray-500">
+              {menu.options.length}개의 옵션 선택 가능
+            </p>
+          )}
+        </div>
+      </Card>
+
+      {showDetail && (
+        <MenuDetailModal
+          menu={menu}
+          onClose={() => setShowDetail(false)}
+        />
+      )}
+    </>
   );
 }
 
-export function useCart() {
-  const context = useContext(CartContext);
-  if (context === undefined) {
-    throw new Error('useCart must be used within a CartProvider');
-  }
-  return context;
+```
+
+---
+
+## File: src\components\ui\avatar.tsx
+
+```typescript
+"use client";
+
+import * as React from "react";
+import * as AvatarPrimitive from "@radix-ui/react-avatar@1.1.3";
+
+import { cn } from "./utils";
+
+function Avatar({
+  className,
+  ...props
+}: React.ComponentProps<typeof AvatarPrimitive.Root>) {
+  return (
+    <AvatarPrimitive.Root
+      data-slot="avatar"
+      className={cn(
+        "relative flex size-10 shrink-0 overflow-hidden rounded-full",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
+
+function AvatarImage({
+  className,
+  ...props
+}: React.ComponentProps<typeof AvatarPrimitive.Image>) {
+  return (
+    <AvatarPrimitive.Image
+      data-slot="avatar-image"
+      className={cn("aspect-square size-full", className)}
+      {...props}
+    />
+  );
+}
+
+function AvatarFallback({
+  className,
+  ...props
+}: React.ComponentProps<typeof AvatarPrimitive.Fallback>) {
+  return (
+    <AvatarPrimitive.Fallback
+      data-slot="avatar-fallback"
+      className={cn(
+        "bg-muted flex size-full items-center justify-center rounded-full",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Avatar, AvatarImage, AvatarFallback };
+
 ```
 
 ---
 
-## File: src\data\mockCoupons.ts
+## File: src\components\ui\popover.tsx
 
 ```typescript
-import { Coupon } from '../types/coupon';
+"use client";
 
-export const mockCoupons: Coupon[] = [
-  {
-    id: 'coupon-1',
-    code: 'WELCOME2024',
-    name: '신규 가입 환영 쿠폰',
-    discountType: 'fixed',
-    discountValue: 3000,
-    minOrderAmount: 15000,
-    validFrom: new Date('2024-01-01'),
-    validUntil: new Date('2024-12-31'),
-    isActive: true,
-    createdAt: new Date('2024-01-01'),
-    isUsed: false,
-  },
-  {
-    id: 'coupon-2',
-    code: 'PERCEN10',
-    name: '10% 할인 쿠폰',
-    discountType: 'percentage',
-    discountValue: 10,
-    minOrderAmount: 20000,
-    maxDiscountAmount: 5000,
-    validFrom: new Date('2024-01-01'),
-    validUntil: new Date('2024-12-31'),
-    isActive: true,
-    createdAt: new Date('2024-01-15'),
-    isUsed: false,
-  },
-  {
-    id: 'coupon-3',
-    code: 'BIGDEAL',
-    name: '대박 할인 5000원',
-    discountType: 'fixed',
-    discountValue: 5000,
-    minOrderAmount: 30000,
-    validFrom: new Date('2024-06-01'),
-    validUntil: new Date('2024-06-30'),
-    isActive: false,
-    createdAt: new Date('2024-05-20'),
-    isUsed: true,
-    usedAt: new Date('2024-06-15'),
-  },
-];
+import * as React from "react";
+import * as PopoverPrimitive from "@radix-ui/react-popover@1.1.6";
+
+import { cn } from "./utils";
+
+function Popover({
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Root>) {
+  return <PopoverPrimitive.Root data-slot="popover" {...props} />;
+}
+
+function PopoverTrigger({
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {
+  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
+}
+
+function PopoverContent({
+  className,
+  align = "center",
+  sideOffset = 4,
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+  return (
+    <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Content
+        data-slot="popover-content"
+        align={align}
+        sideOffset={sideOffset}
+        className={cn(
+          "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border p-4 shadow-md outline-hidden",
+          className,
+        )}
+        {...props}
+      />
+    </PopoverPrimitive.Portal>
+  );
+}
+
+function PopoverAnchor({
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Anchor>) {
+  return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...props} />;
+}
+
+export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
+
 ```
 
 ---
 
-## File: src\devtools\safeSnapshot.ts
+## File: src\components\ui\separator.tsx
 
 ```typescript
-import { Query, onSnapshot, DocumentReference } from 'firebase/firestore';
+"use client";
+
+import * as React from "react";
+import * as SeparatorPrimitive from "@radix-ui/react-separator@1.1.2";
+
+import { cn } from "./utils";
+
+function Separator({
+  className,
+  orientation = "horizontal",
+  decorative = true,
+  ...props
+}: React.ComponentProps<typeof SeparatorPrimitive.Root>) {
+  return (
+    <SeparatorPrimitive.Root
+      data-slot="separator-root"
+      decorative={decorative}
+      orientation={orientation}
+      className={cn(
+        "bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Separator };
+
+```
+
+---
+
+## File: src\hooks\useReorder.ts
+
+```typescript
+import { useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { useCart } from '../contexts/CartContext';
+import { Order, OrderItem } from '../types/order';
+import { Menu } from '../types/menu';
+import { toast } from 'sonner';
+
+type ReorderStatus = 'valid' | 'deleted' | 'hidden' | 'soldout' | 'error';
+
+interface ReorderCheckResult {
+    item: OrderItem;
+    status: ReorderStatus;
+    menuData?: Menu;
+    firestoreMenuId?: string;
+    reason?: string;
+}
+
+export function useReorder() {
+    const { addItem, clearCart } = useCart();
+    const [reordering, setReordering] = useState(false);
+
+    const handleReorder = async (storeId: string, order: Order) => {
+        if (!storeId || !order.items || order.items.length === 0) return;
+
+        if (!window.confirm('장바구니를 비우고 이 주문을 다시 담으시겠습니까?\n(옵션은 초기화되므로 다시 선택해주세요)')) {
+            return;
+        }
+
+        setReordering(true);
+        try {
+            const promises = order.items.map(async (item): Promise<ReorderCheckResult> => {
+                try {
+                    // R2-FIX-04: menuId fallback
+                    const menuId = item.menuId ?? (item as any).id;
+                    if (!menuId) return { item, status: 'error', reason: 'ID 없음' };
+
+                    const menuRef = doc(db, 'stores', storeId, 'menus', menuId);
+                    const menuSnap = await getDoc(menuRef);
+
+                    if (!menuSnap.exists()) {
+                        return { item, status: 'deleted', reason: '메뉴 삭제됨' };
+                    }
+
+                    const menuData = menuSnap.data() as Menu;
+
+                    if (menuData.isHidden) {
+                        return { item, status: 'hidden', reason: '메뉴 숨김 처리됨' };
+                    }
+
+                    if (menuData.soldout) {
+                        return { item, status: 'soldout', reason: '품절됨' };
+                    }
+
+                    return { item, status: 'valid', menuData, firestoreMenuId: menuSnap.id };
+                } catch (e) {
+                    return { item, status: 'error', reason: '확인 불가' };
+                }
+            });
+
+            const results = await Promise.all(promises);
+
+            const validItems: ReorderCheckResult[] = [];
+            const invalidItems: ReorderCheckResult[] = [];
+
+            results.forEach(res => {
+                if (res.status === 'valid') {
+                    validItems.push(res);
+                } else {
+                    invalidItems.push(res);
+                }
+            });
+
+            if (validItems.length === 0) {
+                toast.error('담을 수 있는 메뉴가 없습니다. (전체 품절 또는 삭제됨)');
+                return;
+            }
+
+            // 2. 장바구니 초기화 및 담기
+            clearCart();
+
+            validItems.forEach(({ item, menuData, firestoreMenuId }) => {
+                if (!menuData || !firestoreMenuId) return;
+
+                // R2-FIX-02: 옵션 제거 정책 (가장 안전한 방법)
+                // 옵션 가격/구조 변경 리스크로 인해 옵션은 제외하고 기본 메뉴만 담음
+                addItem({
+                    menuId: firestoreMenuId,
+                    name: menuData.name,
+                    price: menuData.price,
+                    quantity: item.quantity,
+                    options: [], // 옵션 초기화
+                    imageUrl: menuData.imageUrl,
+                });
+            });
+
+            // 3. 결과 알림 (R2-FIX-04: 상세 통계)
+            const soldoutCount = invalidItems.filter(i => i.status === 'soldout').length;
+            const hiddenCount = invalidItems.filter(i => i.status === 'hidden').length;
+            const deletedCount = invalidItems.filter(i => i.status === 'deleted').length; // error 포함
+
+            if (invalidItems.length > 0) {
+                let msg = `${validItems.length}개 메뉴 담기 성공`;
+                const excluded = [];
+                if (soldoutCount > 0) excluded.push(`품절 ${soldoutCount}`);
+                if (hiddenCount > 0) excluded.push(`숨김 ${hiddenCount}`);
+                if (deletedCount > 0) excluded.push(`삭제/기타 ${deletedCount}`);
+
+                toast.warning(`${msg} (${excluded.join(', ')} 제외됨)`);
+                toast.info('옵션은 초기화되었으니 다시 선택해주세요.');
+            } else {
+                toast.success('메뉴를 장바구니에 담았습니다! 옵션을 다시 선택해주세요.');
+            }
+
+        } catch (error) {
+            console.error('Reorder error:', error);
+            toast.error('재주문 처리 중 오류가 발생했습니다.');
+        } finally {
+            setReordering(false);
+        }
+    };
+
+    return { handleReorder, reordering };
+}
+
+```
+
+---
+
+## File: src\lib\firebase.ts
+
+```typescript
+import { initializeApp } from 'firebase/app';
+import { getAnalytics } from 'firebase/analytics';
+import { getAuth } from 'firebase/auth';
+import { initializeFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+import { getMessaging, isSupported } from 'firebase/messaging';
+
+// Firebase 설정
+// .env 파일에서 환경 변수를 불러옵니다
+// .env.example 파일을 참고하여 .env.local 파일을 생성하세요
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+};
+
+// 필수 환경 변수 검증
+const requiredEnvVars = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+] as const;
+
+const missingVars = requiredEnvVars.filter(
+  (varName) => !import.meta.env[varName]
+);
+
+if (missingVars.length > 0) {
+  console.error(
+    '❌ Firebase 환경 변수가 설정되지 않았습니다:',
+    missingVars.join(', ')
+  );
+  console.error(
+    '💡 .env.example 파일을 참고하여 .env.local 파일을 생성하고 Firebase 설정을 추가하세요.'
+  );
+  throw new Error(
+    `Firebase 환경 변수가 누락되었습니다: ${missingVars.join(', ')}`
+  );
+}
+
+// Firebase 초기화
+let app;
+try {
+  app = initializeApp(firebaseConfig);
+} catch (error) {
+  console.error('❌ Firebase 초기화 실패:', error);
+  throw new Error('Firebase 초기화에 실패했습니다. 환경 변수를 확인하세요.');
+}
+
+// Firebase 서비스 초기화
+export const auth = getAuth(app);
+export const db = initializeFirestore(app, {
+  ignoreUndefinedProperties: true
+});
+export const storage = getStorage(app);
+
+// Firebase Analytics (브라우저 환경에서만)
+let analytics: any = null;
+if (typeof window !== 'undefined') {
+  analytics = getAnalytics(app);
+}
+export { analytics };
+
+// Firebase Cloud Messaging (FCM) - 선택적
+let messaging: any = null;
+if (typeof window !== 'undefined') {
+  isSupported().then((supported) => {
+    if (supported) {
+      messaging = getMessaging(app);
+    }
+  });
+}
+export { messaging };
+
+export default app;
+```
+
+---
+
+## File: src\lib\nicepayClient.ts
+
+```typescript
+import { NicepayRequestParams } from '../types/global';
+
+const NICEPAY_SCRIPT_URL = 'https://pay.nicepay.co.kr/v1/js/';
 
 /**
- * onSnapshot의 안전한 래퍼
- * - 권한 에러 시 조용히 실패
- * - enabled 옵션으로 구독 제어
- * - 에러 시 console.warn으로 로깅
+ * NICEPAY JS SDK를 동적으로 로드합니다.
  */
-export function onSnapshotSafe<T = any>(
-  query: Query<T> | DocumentReference<T>,
-  callback: (snapshot: any) => void,
-  options?: {
-    enabled?: boolean;
-    onError?: (error: Error) => void;
-  }
-) {
-  const enabled = options?.enabled !== false;
-
-  if (!enabled) {
-    // 구독하지 않고 빈 unsubscribe 함수 반환
-    return () => {};
-  }
-
-  try {
-    return onSnapshot(
-      query,
-      callback,
-      (error) => {
-        // 권한 에러는 경고만 출력
-        if (error.code === 'permission-denied') {
-          console.warn('[safeSnapshot] 권한 없음:', error.message);
-        } else {
-          console.warn('[safeSnapshot] 에러 발생:', error);
+export function loadNicepayScript(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (window.AUTHNICE) {
+            resolve();
+            return;
         }
 
-        // 커스텀 에러 핸들러 호출
-        if (options?.onError) {
-          options.onError(error);
+        const script = document.createElement('script');
+        script.src = NICEPAY_SCRIPT_URL;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('NICEPAY Script load failed'));
+        document.body.appendChild(script);
+    });
+}
+
+/**
+ * NICEPAY 결제창을 호출합니다.
+ * @param params 결제 요청 파라미터
+ */
+export async function requestNicepayPayment(params: NicepayRequestParams): Promise<void> {
+    await loadNicepayScript();
+
+    if (!window.AUTHNICE) {
+        throw new Error('NICEPAY SDK SDK not loaded');
+    }
+
+    window.AUTHNICE.requestPay({
+        ...params,
+        method: 'card', // 기본적으로 카드 결제
+    });
+}
+
+```
+
+---
+
+## File: src\pages\admin\AdminOrderManagement.test.tsx
+
+```typescript
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import AdminOrderManagement from './AdminOrderManagement';
+import { useStore } from '../../contexts/StoreContext';
+import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { updateOrderStatus, deleteOrder } from '../../services/orderService';
+
+// Mocks
+vi.mock('../../contexts/StoreContext', () => ({
+    useStore: vi.fn(),
+}));
+
+vi.mock('../../hooks/useFirestoreCollection', () => ({
+    useFirestoreCollection: vi.fn(),
+}));
+
+vi.mock('../../services/orderService', () => ({
+    updateOrderStatus: vi.fn(),
+    deleteOrder: vi.fn(),
+    getAllOrdersQuery: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+    toast: {
+        success: vi.fn(),
+        error: vi.fn(),
+    },
+}));
+
+// Mock child components
+vi.mock('../../components/admin/AdminSidebar', () => ({
+    default: () => <div data-testid="sidebar">Sidebar</div>,
+}));
+vi.mock('../../components/admin/Receipt', () => ({
+    default: ({ order }: any) => order ? <div data-testid="receipt">Receipt for {order.id}</div> : null,
+}));
+vi.mock('../../components/admin/AdminOrderAlert', () => ({
+    default: () => null,
+}));
+
+// Mock Lucide
+vi.mock('lucide-react', () => ({
+    Package: () => <span>Pkg</span>,
+    MapPin: () => <span>Map</span>,
+    Phone: () => <span>Phone</span>,
+    CreditCard: () => <span>Card</span>,
+    ChevronDown: () => <span>Down</span>,
+}));
+
+describe('AdminOrderManagement', () => {
+    const mockStore = { id: 'store_1', name: 'Test Store' };
+
+    const originalPrint = window.print;
+    const originalConfirm = window.confirm;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (useStore as any).mockReturnValue({ store: mockStore });
+        window.print = vi.fn();
+        window.confirm = vi.fn(() => true);
+    });
+
+    afterEach(() => {
+        window.print = originalPrint;
+        window.confirm = originalConfirm;
+        vi.useRealTimers();
+    });
+
+    const mockOrders = [
+        {
+            id: 'order_1',
+            status: '접수',
+            totalPrice: 15000,
+            items: [{ name: 'Pizza', quantity: 1, price: 15000, options: [] }],
+            createdAt: { toDate: () => new Date('2024-01-01T10:00:00') },
+            address: 'Seoul',
+            orderType: '배달'
+        },
+        {
+            id: 'order_2',
+            status: '배달중',
+            totalPrice: 20000,
+            items: [{ name: 'Burger', quantity: 2, price: 10000, options: [] }],
+            createdAt: { toDate: () => new Date('2024-01-01T11:00:00') },
+            address: 'Busan',
+            orderType: '배달'
         }
-      }
+    ];
+
+    it('should render empty state', () => {
+        (useFirestoreCollection as any).mockReturnValue({ data: [] });
+        render(<AdminOrderManagement />);
+        expect(screen.getByText('주문이 없습니다')).toBeInTheDocument();
+    });
+
+    it('should render orders list', () => {
+        (useFirestoreCollection as any).mockReturnValue({ data: mockOrders });
+        render(<AdminOrderManagement />);
+        expect(screen.getByText('주문 #order_1')).toBeInTheDocument();
+    });
+
+    it('should filter orders', async () => {
+        (useFirestoreCollection as any).mockReturnValue({ data: mockOrders });
+        render(<AdminOrderManagement />);
+
+        expect(screen.getByText('주문 #order_1')).toBeInTheDocument();
+
+        const buttons = screen.getAllByRole('button');
+        const deliveryFilter = buttons.find(b => b.innerHTML.includes('배달중')); // innerHTML check for text + span
+
+        expect(deliveryFilter).toBeDefined();
+        fireEvent.click(deliveryFilter!);
+
+        await waitFor(() => {
+            expect(screen.queryByText('주문 #order_1')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('주문 #order_2')).toBeInTheDocument();
+    });
+
+    it('should handle status change', async () => {
+        (useFirestoreCollection as any).mockReturnValue({ data: mockOrders });
+        render(<AdminOrderManagement />);
+
+        fireEvent.click(screen.getByText('주문 #order_1'));
+
+        const nextBtn = await screen.findByRole('button', { name: /다음 단계로/ });
+        fireEvent.click(nextBtn);
+
+        expect(updateOrderStatus).toHaveBeenCalledWith(mockStore.id, 'order_1', '접수완료');
+    });
+
+    it('should handle print receipt', async () => {
+        vi.useFakeTimers();
+        (useFirestoreCollection as any).mockReturnValue({ data: mockOrders });
+        render(<AdminOrderManagement />);
+
+        fireEvent.click(screen.getByText('주문 #order_1'));
+        await screen.findByText('주문 상품');
+
+        const printBtn = screen.getByText('🖨️ 영수증 인쇄').closest('button');
+        fireEvent.click(printBtn!);
+
+        expect(await screen.findByTestId('receipt')).toBeInTheDocument();
+
+        act(() => {
+            vi.runAllTimers();
+        });
+
+        expect(window.print).toHaveBeenCalled();
+    });
+});
+
+```
+
+---
+
+## File: src\pages\admin\AdminStatsPage.tsx
+
+```typescript
+import React, { useMemo, useState } from 'react';
+import {
+    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+    LineChart, Line
+} from 'recharts';
+import { Calendar, DollarSign, TrendingUp } from 'lucide-react';
+import { useStore } from '../../contexts/StoreContext';
+import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { getAllOrdersQuery } from '../../services/orderService';
+import { Order } from '../../types/order';
+import AdminSidebar from '../../components/admin/AdminSidebar';
+import Card from '../../components/common/Card';
+
+export default function AdminStatsPage() {
+    const { store } = useStore();
+    const [period, setPeriod] = useState<'week' | 'month'>('week');
+
+    const { data: orders, loading } = useFirestoreCollection<Order>(
+        store?.id ? getAllOrdersQuery(store.id) : null
     );
-  } catch (error) {
-    console.warn('[safeSnapshot] 구독 실패:', error);
-    return () => {};
-  }
+
+    const statsData = useMemo(() => {
+        if (!orders) return [];
+
+        const now = new Date();
+        const days = period === 'week' ? 7 : 30;
+        const result = [];
+
+        // Initialize days
+        for (let i = days - 1; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(now.getDate() - i);
+            const key = d.toISOString().split('T')[0]; // YYYY-MM-DD
+            const label = period === 'week'
+                ? ['일', '월', '화', '수', '목', '금', '토'][d.getDay()]
+                : `${d.getMonth() + 1}/${d.getDate()}`;
+
+            result.push({
+                date: key,
+                label: label,
+                sales: 0,
+                count: 0
+            });
+        }
+
+        // Aggregate orders
+        orders.forEach(order => {
+            if (order.status !== '완료') return;
+
+            const orderDate = new Date(order.createdAt).toISOString().split('T')[0];
+            const target = result.find(r => r.date === orderDate);
+            if (target) {
+                target.sales += order.totalPrice;
+                target.count += 1;
+            }
+        });
+
+        return result;
+    }, [orders, period]);
+
+    const totalSalesInPeriod = statsData.reduce((sum, d) => sum + d.sales, 0);
+    const totalCountInPeriod = statsData.reduce((sum, d) => sum + d.count, 0);
+
+    if (loading) {
+        return <div className="min-h-screen flex items-center justify-center">로딩 중...</div>;
+    }
+
+    return (
+        <div className="flex min-h-screen bg-gray-50">
+            <AdminSidebar />
+
+            <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+                <div className="max-w-7xl mx-auto">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-8">
+                        <div>
+                            <h1 className="text-3xl mb-2 font-bold text-gray-900">매출 통계</h1>
+                            <p className="text-gray-600">매장 매출 흐름을 분석합니다.</p>
+                        </div>
+
+                        <div className="flex bg-white p-1 rounded-lg border">
+                            <button
+                                onClick={() => setPeriod('week')}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${period === 'week' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'
+                                    }`}
+                            >
+                                최근 7일
+                            </button>
+                            <button
+                                onClick={() => setPeriod('month')}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${period === 'month' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'
+                                    }`}
+                            >
+                                최근 30일
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <Card>
+                            <div className="flex items-center gap-4">
+                                <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
+                                    <DollarSign className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-gray-500">기간 내 총 매출</p>
+                                    <h3 className="text-2xl font-bold">{totalSalesInPeriod.toLocaleString()}원</h3>
+                                </div>
+                            </div>
+                        </Card>
+                        <Card>
+                            <div className="flex items-center gap-4">
+                                <div className="p-3 bg-green-100 text-green-600 rounded-xl">
+                                    <TrendingUp className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-gray-500">기간 내 주문 수</p>
+                                    <h3 className="text-2xl font-bold">{totalCountInPeriod}건</h3>
+                                </div>
+                            </div>
+                        </Card>
+                    </div>
+
+                    <div className="space-y-6">
+                        <Card className="p-6">
+                            <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                <DollarSign className="w-5 h-5 text-gray-500" />
+                                일별 매출 추이
+                            </h3>
+                            <div className="h-[300px]">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={statsData}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                        <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                                        <YAxis tickFormatter={(value) => `${value / 10000}만`} tick={{ fontSize: 12 }} />
+                                        <Tooltip
+                                            formatter={(value: number) => [`${value.toLocaleString()}원`, '매출']}
+                                            labelStyle={{ color: '#374151' }}
+                                        />
+                                        <Bar dataKey="sales" fill="#3B82F6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </Card>
+
+                        <Card className="p-6">
+                            <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                <Calendar className="w-5 h-5 text-gray-500" />
+                                주문 건수 추이
+                            </h3>
+                            <div className="h-[300px]">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={statsData}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                        <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                                        <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                                        <Tooltip
+                                            formatter={(value: number) => [`${value}건`, '주문수']}
+                                        />
+                                        <Line type="monotone" dataKey="count" stroke="#10B981" strokeWidth={3} dot={{ r: 4 }} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </Card>
+                    </div>
+                </div>
+            </main>
+        </div>
+    );
 }
-
-export default onSnapshotSafe;
-
-```
-
----
-
-## File: src\lib\firestoreExamples.ts
-
-```typescript
-/**
- * Firestore 데이터 격리 사용 예제
- * 실제 코드에서 이렇게 사용하세요
- */
-
-import { db } from '../config/firebase';
-import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { getMenusPath, getOrdersPath, getCouponsPath, getReviewsPath } from './firestorePaths';
-
-/**
- * ❌ 잘못된 방법 (멀티 테넌트 미지원)
- */
-export async function getBadMenus() {
-  const snapshot = await getDocs(collection(db, 'menus'));
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-}
-
-/**
- * ✅ 올바른 방법 (멀티 테넌트 지원)
- */
-export async function getGoodMenus(storeId: string) {
-  const snapshot = await getDocs(collection(db, getMenusPath(storeId)));
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-}
-
-/**
- * 예제 1: 메뉴 조회
- */
-export async function getMenusByStore(storeId: string) {
-  // ❌ const menusRef = collection(db, 'menus');
-  // ✅ 
-  const menusRef = collection(db, getMenusPath(storeId));
-  const snapshot = await getDocs(menusRef);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-}
-
-/**
- * 예제 2: 메뉴 추가
- */
-export async function addMenu(storeId: string, menuData: any) {
-  // ❌ const menusRef = collection(db, 'menus');
-  // ✅
-  const menusRef = collection(db, getMenusPath(storeId));
-  return await addDoc(menusRef, menuData);
-}
-
-/**
- * 예제 3: 주문 조회 (사용자별)
- */
-export async function getUserOrders(storeId: string, userId: string) {
-  // ❌ const ordersRef = collection(db, 'orders');
-  // ✅
-  const ordersRef = collection(db, getOrdersPath(storeId));
-  const q = query(ordersRef, where('userId', '==', userId));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-}
-
-/**
- * 예제 4: 쿠폰 조회
- */
-export async function getActiveCoupons(storeId: string) {
-  // ❌ const couponsRef = collection(db, 'coupons');
-  // ✅
-  const couponsRef = collection(db, getCouponsPath(storeId));
-  const q = query(couponsRef, where('active', '==', true));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-}
-
-/**
- * 예제 5: 리뷰 추가
- */
-export async function addReview(storeId: string, reviewData: any) {
-  // ❌ const reviewsRef = collection(db, 'reviews');
-  // ✅
-  const reviewsRef = collection(db, getReviewsPath(storeId));
-  return await addDoc(reviewsRef, reviewData);
-}
-
-/**
- * 사용 예시:
- * 
- * // StoreContext에서 storeId 가져오기
- * const { storeId } = useStore();
- * 
- * // 메뉴 조회
- * const menus = await getMenusByStore(storeId);
- * 
- * // 주문 조회
- * const orders = await getUserOrders(storeId, user.uid);
- */
 
 ```
 
@@ -1581,6 +1235,28 @@ export default function CheckoutPage() {
   const { user } = useAuth();
   const { store } = useStore();
   const storeId = store?.id;
+
+  // ATOM-132: 매장 일시정지 체크
+  if (store?.isOrderingPaused) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full text-center py-12">
+          <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse">
+            <span className="text-4xl">⛔</span>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-3">현재 주문 접수가 중단되었습니다</h2>
+          <p className="text-gray-600 mb-8 whitespace-pre-wrap">
+            {store.pausedReason || "매장 사정으로 인해 잠시 주문을 받을 수 없습니다."}
+            <br />
+            <span className="text-sm text-gray-500 mt-2 block">잠시 후 다시 이용해주세요.</span>
+          </p>
+          <Button onClick={() => navigate('/')} fullWidth size="lg">
+            홈으로 돌아가기
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   // Firestore에서 쿠폰 조회
   const { data: coupons } = useFirestoreCollection<Coupon>(
@@ -2141,123 +1817,170 @@ export default function CheckoutPage() {
 
 ---
 
-## File: src\services\orderService.test.ts
+## File: src\pages\ReviewBoardPage.test.tsx
 
 ```typescript
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createOrder, updateOrderStatus, cancelOrder, deleteOrder } from './orderService';
-import { collection, addDoc, updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import { render, screen } from '@testing-library/react';
+import ReviewList from '../components/review/ReviewList';
+import ReviewBoardPage from './ReviewBoardPage';
+import { useStore } from '../contexts/StoreContext';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+
+// Mocks
+vi.mock('../../contexts/StoreContext', () => ({
+    useStore: vi.fn(),
+}));
+
+vi.mock('../../hooks/useFirestoreCollection', () => ({
+    useFirestoreCollection: vi.fn(),
+}));
+
+vi.mock('../../services/reviewService', () => ({
+    getAllReviewsQuery: vi.fn(),
+}));
+
+vi.mock('../../utils/formatDate', () => ({
+    formatDate: (date: any) => '2024-01-01',
+}));
+
+// Mock Lucide
+vi.mock('lucide-react', () => ({
+    Star: ({ className }: any) => <span className={className}>Star</span>,
+    User: () => <span>User</span>,
+    MessageSquare: () => <span>Msg</span>,
+}));
+
+describe('ReviewBoardPage', () => {
+    it('should render header', () => {
+        render(<ReviewBoardPage />);
+        expect(screen.getByText('고객 후기')).toBeInTheDocument();
+    });
+});
+
+describe('ReviewList', () => {
+    const mockStore = { id: 'store_1' };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (useStore as any).mockReturnValue({ store: mockStore });
+        (useFirestoreCollection as any).mockReturnValue({ data: [], loading: false });
+    });
+
+    it('should render loading state', () => {
+        (useFirestoreCollection as any).mockReturnValue({
+            data: [],
+            loading: true,
+        });
+        render(<ReviewList />);
+        expect(screen.getByText('리뷰를 불러오는 중...')).toBeInTheDocument();
+    });
+
+    it('should render empty state', () => {
+        (useFirestoreCollection as any).mockReturnValue({
+            data: [],
+            loading: false,
+        });
+        render(<ReviewList />);
+        expect(screen.getByText('아직 작성된 리뷰가 없습니다')).toBeInTheDocument();
+    });
+
+    it('should render reviews', () => {
+        const mockReviews = [
+            {
+                id: 'review_1',
+                rating: 5,
+                comment: 'Great!',
+                userDisplayName: 'User A',
+                createdAt: '2024-01-01',
+                images: []
+            }
+        ];
+
+        (useFirestoreCollection as any).mockReturnValue({
+            data: mockReviews,
+            loading: false,
+        });
+
+        render(<ReviewList />);
+        expect(screen.getByText('Great!')).toBeInTheDocument();
+        expect(screen.getByText('User A')).toBeInTheDocument();
+    });
+});
+
+```
+
+---
+
+## File: src\services\couponService.test.ts
+
+```typescript
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { validateCoupon } from './couponService';
 
 // Mock dependencies
 vi.mock('../lib/firebase', () => ({
     db: {},
 }));
 
-vi.mock('firebase/firestore', async () => {
-    const actual = await vi.importActual('firebase/firestore');
-    return {
-        ...actual,
-        collection: vi.fn(),
-        addDoc: vi.fn(),
-        updateDoc: vi.fn(),
-        deleteDoc: vi.fn(),
-        doc: vi.fn(),
-        serverTimestamp: vi.fn(() => 'MOCK_TIMESTAMP'),
-        query: vi.fn(),
-        where: vi.fn(),
-        orderBy: vi.fn(),
-    };
-});
-
-describe('orderService', () => {
-    const mockStoreId = 'store_123';
-    const mockOrderId = 'order_abc';
-
+describe('couponService', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
-    describe('createOrder', () => {
-        it('should create an order with default status "접수"', async () => {
-            const mockDocRef = { id: 'new_order_id' };
-            (addDoc as any).mockResolvedValue(mockDocRef);
-            (collection as any).mockReturnValue('MOCK_COLLECTION_REF');
-
-            const orderData = {
-                userId: 'user_1',
-                items: [],
-                totalPrice: 10000,
-                paymentType: 'card',
-                address: 'Seoul',
-                phone: '010-0000-0000'
+    describe('validateCoupon', () => {
+        it('should return valid if conditions met', () => {
+            const coupon = {
+                code: 'TEST',
+                discountAmount: 1000,
+                minOrderAmount: 10000,
+                validUntil: { toDate: () => new Date('2099-12-31') }, // Future
+                isActive: true,
+                usedByUserIds: []
             };
 
-            const result = await createOrder(mockStoreId, orderData as any);
-
-            expect(collection).toHaveBeenCalledWith(expect.anything(), 'stores', mockStoreId, 'orders');
-            expect(addDoc).toHaveBeenCalledWith('MOCK_COLLECTION_REF', expect.objectContaining({
-                ...orderData,
-                status: '접수',
-                createdAt: 'MOCK_TIMESTAMP',
-                updatedAt: 'MOCK_TIMESTAMP',
-            }));
-            expect(result).toBe('new_order_id');
+            const result = validateCoupon(coupon as any, 15000, 'user1');
+            expect(result.isValid).toBe(true);
         });
 
-        it('should use provided status if given', async () => {
-            const mockDocRef = { id: 'new_order_id' };
-            (addDoc as any).mockResolvedValue(mockDocRef);
-
-            const orderData = {
-                status: '조리중',
-                totalPrice: 10000,
+        it('should fail if order amount is too low', () => {
+            const coupon = {
+                code: 'TEST',
+                minOrderAmount: 10000,
+                validUntil: { toDate: () => new Date('2099-12-31') },
+                isActive: true,
+                usedByUserIds: []
             };
-
-            await createOrder(mockStoreId, orderData as any);
-
-            expect(addDoc).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-                status: '조리중',
-            }));
+            // 5000 < 10000
+            const result = validateCoupon(coupon as any, 5000, 'user1');
+            expect(result.isValid).toBe(false);
+            expect(result.reason).toContain('최소 주문 금액');
         });
-    });
 
-    describe('updateOrderStatus', () => {
-        it('should update order status and timestamp', async () => {
-            (doc as any).mockReturnValue('MOCK_DOC_REF');
-
-            await updateOrderStatus(mockStoreId, mockOrderId, '배달중');
-
-            expect(doc).toHaveBeenCalledWith(expect.anything(), 'stores', mockStoreId, 'orders', mockOrderId);
-            expect(updateDoc).toHaveBeenCalledWith('MOCK_DOC_REF', {
-                status: '배달중',
-                updatedAt: 'MOCK_TIMESTAMP',
-            });
+        it('should fail if expired', () => {
+            const coupon = {
+                code: 'TEST',
+                minOrderAmount: 0,
+                validUntil: { toDate: () => new Date('2020-01-01') }, // Past
+                isActive: true,
+                usedByUserIds: []
+            };
+            const result = validateCoupon(coupon as any, 10000, 'user1');
+            expect(result.isValid).toBe(false);
+            expect(result.reason).toContain('유효기간');
         });
-    });
 
-    describe('cancelOrder', () => {
-        it('should set status to "취소"', async () => {
-            (doc as any).mockReturnValue('MOCK_DOC_REF');
-
-            await cancelOrder(mockStoreId, mockOrderId);
-
-            expect(updateDoc).toHaveBeenCalledWith('MOCK_DOC_REF', {
-                status: '취소',
-                updatedAt: 'MOCK_TIMESTAMP',
-            });
-        });
-    });
-
-    describe('deleteOrder', () => {
-        it('should delete the order document', async () => {
-            (doc as any).mockReturnValue('MOCK_DOC_REF');
-            // deleteOrder 내부의 dynamic import도 결국 mocks를 사용할 것으로 예상됨
-            // 하지만 테스트 환경에 따라 모킹 방식이 다를 수 있음.
-            // 여기서는 vi.mock이 top-level이므로 dynamic import도 모킹된 버전을 받을 것임.
-
-            await deleteOrder(mockStoreId, mockOrderId);
-
-            expect(deleteDoc).toHaveBeenCalledWith('MOCK_DOC_REF');
+        it('should fail if already used by user', () => {
+            const coupon = {
+                code: 'TEST',
+                minOrderAmount: 0,
+                validUntil: { toDate: () => new Date('2099-12-31') },
+                isActive: true,
+                usedByUserIds: ['user1'] // Used
+            };
+            const result = validateCoupon(coupon as any, 10000, 'user1');
+            expect(result.isValid).toBe(false);
+            expect(result.reason).toContain('이미 사용');
         });
     });
 });
@@ -2266,56 +1989,381 @@ describe('orderService', () => {
 
 ---
 
-## File: src\utils\labels.ts
+## File: src\services\eventService.ts
+
+```typescript
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { Event } from '../types/event';
+
+const getEventCollection = (storeId: string) => collection(db, 'stores', storeId, 'events');
+
+/**
+ * 이벤트 생성
+ */
+export async function createEvent(
+  storeId: string,
+  eventData: Omit<Event, 'id' | 'createdAt'>
+): Promise<string> {
+  try {
+    const docRef = await addDoc(getEventCollection(storeId), {
+      title: eventData.title,
+      imageUrl: eventData.imageUrl,
+      link: eventData.link,
+      active: eventData.active,
+      startDate: eventData.startDate instanceof Timestamp ? eventData.startDate : Timestamp.fromDate(new Date(eventData.startDate)),
+      endDate: eventData.endDate instanceof Timestamp ? eventData.endDate : Timestamp.fromDate(new Date(eventData.endDate)),
+      createdAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error('이벤트 생성 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 이벤트 수정
+ */
+export async function updateEvent(
+  storeId: string,
+  eventId: string,
+  eventData: Partial<Omit<Event, 'id' | 'createdAt'>>
+): Promise<void> {
+  try {
+    const eventRef = doc(db, 'stores', storeId, 'events', eventId);
+    const updateData: any = {};
+
+    if (eventData.title !== undefined) updateData.title = eventData.title;
+    if (eventData.imageUrl !== undefined) updateData.imageUrl = eventData.imageUrl;
+    if (eventData.link !== undefined) updateData.link = eventData.link;
+    if (eventData.active !== undefined) updateData.active = eventData.active;
+    if (eventData.startDate !== undefined) {
+      const start = eventData.startDate as any;
+      updateData.startDate = start instanceof Timestamp ? start : Timestamp.fromDate(new Date(start));
+    }
+    if (eventData.endDate !== undefined) {
+      const end = eventData.endDate as any;
+      updateData.endDate = end instanceof Timestamp ? end : Timestamp.fromDate(new Date(end));
+    }
+
+    await updateDoc(eventRef, updateData);
+  } catch (error) {
+    console.error('이벤트 수정 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 이벤트 삭제
+ */
+export async function deleteEvent(
+  storeId: string,
+  eventId: string
+): Promise<void> {
+  try {
+    const eventRef = doc(db, 'stores', storeId, 'events', eventId);
+    await deleteDoc(eventRef);
+  } catch (error) {
+    console.error('이벤트 삭제 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 이벤트 활성화 토글
+ */
+export async function toggleEventActive(
+  storeId: string,
+  eventId: string,
+  active: boolean
+): Promise<void> {
+  try {
+    const eventRef = doc(db, 'stores', storeId, 'events', eventId);
+    await updateDoc(eventRef, { active });
+  } catch (error) {
+    console.error('이벤트 활성화 상태 변경 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 모든 이벤트 쿼리 (생성일 내림차순)
+ */
+export function getAllEventsQuery(storeId: string) {
+  return query(
+    getEventCollection(storeId),
+    orderBy('createdAt', 'desc')
+  );
+}
+
+/**
+ * 활성화된 이벤트만 조회
+ */
+export function getActiveEventsQuery(storeId: string) {
+  return query(
+    getEventCollection(storeId),
+    where('active', '==', true),
+    orderBy('startDate', 'asc')
+  );
+}
+
+```
+
+---
+
+## File: src\services\reviewService.ts
+
+```typescript
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { Review, CreateReviewData, UpdateReviewData } from '../types/review';
+
+// 컬렉션 참조 헬퍼
+const getReviewCollection = (storeId: string) => collection(db, 'stores', storeId, 'reviews');
+
+/**
+ * 리뷰 생성
+ */
+export async function createReview(
+  storeId: string,
+  reviewData: CreateReviewData
+): Promise<string> {
+  try {
+    // 1. 리뷰 생성
+    const docRef = await addDoc(getReviewCollection(storeId), {
+      ...reviewData,
+      createdAt: serverTimestamp(),
+    });
+
+    // 2. 주문 문서에 리뷰 정보 미러링 (stores/{storeId}/orders/{orderId})
+    const orderRef = doc(db, 'stores', storeId, 'orders', reviewData.orderId);
+    await updateDoc(orderRef, {
+      reviewed: true,
+      reviewText: reviewData.comment,
+      reviewRating: reviewData.rating,
+      reviewedAt: serverTimestamp(),
+    });
+
+    return docRef.id;
+  } catch (error) {
+    console.error('리뷰 생성 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 리뷰 수정
+ */
+export async function updateReview(
+  storeId: string,
+  reviewId: string,
+  reviewData: UpdateReviewData
+): Promise<void> {
+  try {
+    const reviewRef = doc(db, 'stores', storeId, 'reviews', reviewId);
+    await updateDoc(reviewRef, {
+      ...reviewData,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('리뷰 수정 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 리뷰 삭제
+ */
+export async function deleteReview(
+  storeId: string,
+  reviewId: string,
+  orderId: string
+): Promise<void> {
+  try {
+    // 1. 리뷰 삭제
+    const reviewRef = doc(db, 'stores', storeId, 'reviews', reviewId);
+    await deleteDoc(reviewRef);
+
+    // 2. 주문 문서 리뷰 필드 초기화 (주문이 존재할 경우에만)
+    try {
+      const orderRef = doc(db, 'stores', storeId, 'orders', orderId);
+      await updateDoc(orderRef, {
+        reviewed: false,
+        reviewText: null,
+        reviewRating: null,
+        reviewedAt: null,
+      });
+    } catch (updateError: any) {
+      // 주문이 이미 삭제된 경우(No document to update)는 무시
+      if (updateError?.code === 'not-found' || updateError?.message?.includes('No document to update')) {
+        console.warn('주문 문서를 찾을 수 없어 리뷰 상태를 업데이트하지 못했습니다 (주문 삭제됨).', orderId);
+      } else {
+        // 다른 에러는 로깅하되, 리뷰 삭제 자체는 성공했으므로 상위로 전파하지 않음 (선택 사항)
+        // 상황에 따라 판단해야 하지만, 리뷰 삭제가 메인 의도이므로 경고만 남기겠습니다.
+        console.error('주문 문서 업데이트 중 오류 발생:', updateError);
+      }
+    }
+  } catch (error) {
+    console.error('리뷰 삭제 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 특정 주문의 리뷰 조회
+ */
+export async function getReviewByOrder(
+  storeId: string,
+  orderId: string,
+  userId: string
+): Promise<Review | null> {
+  try {
+    const q = query(
+      getReviewCollection(storeId),
+      where('orderId', '==', orderId),
+      where('userId', '==', userId)
+    );
+
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      return null;
+    }
+
+    const doc = snapshot.docs[0];
+    return {
+      id: doc.id,
+      ...doc.data(),
+    } as Review;
+  } catch (error) {
+    console.error('리뷰 조회 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 모든 리뷰 쿼리 (최신순)
+ */
+export function getAllReviewsQuery(storeId: string) {
+  return query(
+    getReviewCollection(storeId),
+    orderBy('createdAt', 'desc')
+  );
+}
+
+/**
+ * 특정 평점 이상 리뷰 쿼리
+ */
+export function getReviewsByRatingQuery(storeId: string, minRating: number) {
+  return query(
+    getReviewCollection(storeId),
+    where('rating', '>=', minRating),
+    orderBy('rating', 'desc'),
+    orderBy('createdAt', 'desc')
+  );
+}
+
+```
+
+---
+
+## File: src\types\dashboard.ts
+
+```typescript
+import { BadgeVariant } from '../components/common/Badge';
+
+export interface StatCardProps {
+    label: string;
+    value: number | string;
+    icon: React.ReactNode;
+    color: 'blue' | 'green' | 'orange' | 'purple';
+    suffix?: string;
+    loading?: boolean;
+}
+
+export interface QuickStatProps {
+    label: string;
+    value: number | string;
+    suffix: string;
+    color: 'blue' | 'green' | 'red' | 'orange' | 'purple';
+}
+
+export function getNoticeCategoryColor(category: string): BadgeVariant {
+    switch (category) {
+        case '공지': return 'primary';
+        case '이벤트': return 'secondary';
+        case '점검': return 'danger';
+        case '할인': return 'success';
+        default: return 'gray';
+    }
+}
+
+```
+
+---
+
+## File: src\types\review.ts
 
 ```typescript
 /**
- * 라벨 및 상수 관리
+ * 리뷰 타입 정의
  */
 
-export const ORDER_STATUS_LABELS = {
-  '접수': '주문 접수',
-  '조리중': '조리 중',
-  '배달중': '배달 중',
-  '완료': '배달 완료',
-  '취소': '주문 취소',
-} as const;
+export interface Review {
+  id: string;
+  orderId: string;
+  userId: string;
+  userDisplayName: string;
+  rating: number; // 1-5
+  comment: string;
+  images?: string[];
+  createdAt: Date;
+  updatedAt?: Date;
+}
 
-export const PAYMENT_TYPE_LABELS = {
-  '앱결제': '앱 결제',
-  '만나서카드': '만나서 카드 결제',
-  '만나서현금': '만나서 현금 결제',
-  '방문시결제': '방문 시 결제',
-} as const;
+export interface CreateReviewData extends Omit<Review, 'id' | 'createdAt' | 'updatedAt'> { }
 
-export const CATEGORY_LABELS = [
-  '인기메뉴',
-  '추천메뉴',
-  '기본메뉴',
-  '사이드메뉴',
-  '음료',
-  '주류',
-] as const;
+export interface UpdateReviewData extends Partial<Omit<Review, 'id' | 'orderId' | 'userId' | 'createdAt'>> { }
 
-export const NOTICE_CATEGORIES = [
-  '공지',
-  '이벤트',
-  '점검',
-  '할인',
-] as const;
+```
 
-export const COUPON_TYPE_LABELS = {
-  'percentage': '할인율',
-  'fixed': '할인 금액',
-} as const;
+---
 
-export default {
-  ORDER_STATUS_LABELS,
-  PAYMENT_TYPE_LABELS,
-  CATEGORY_LABELS,
-  NOTICE_CATEGORIES,
-  COUPON_TYPE_LABELS,
-};
+## File: src\types\user.ts
+
+```typescript
+export interface User {
+    id: string;
+    email: string;
+    displayName?: string;
+    phone?: string;
+    photoURL?: string;
+    role?: 'user' | 'admin';
+    createdAt?: any;
+}
 
 ```
 

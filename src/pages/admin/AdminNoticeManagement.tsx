@@ -124,7 +124,7 @@ export default function AdminNoticeManagement() {
                       {notice.content}
                     </p>
                     <p className="text-xs text-gray-500">
-                      {formatDateShort(notice.createdAt)}
+                      {notice.createdAt ? formatDateShort(notice.createdAt) : '...'}
                     </p>
                   </div>
 

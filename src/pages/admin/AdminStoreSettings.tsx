@@ -35,24 +35,55 @@ export default function AdminStoreSettings() {
     logoUrl: '',
     bannerUrl: '',
     primaryColor: '#3b82f6',
+    isOrderingPaused: false,
+    pausedReason: '',
+    settings: {
+      autoAcceptOrders: false,
+      estimatedDeliveryTime: 30,
+      paymentMethods: ['앱결제', '만나서카드'],
+      enableReviews: true,
+      enableCoupons: false,
+      enableNotices: true,
+      enableEvents: true,
+      deliverySettings: {
+        provider: 'manual',
+        shopId: '',
+        apiKey: '',
+        apiSecret: ''
+      }
+    }
   });
 
   useEffect(() => {
     if (store) {
       setFormData({
-        name: store.name,
-        description: store.description,
-        phone: store.phone,
-        email: store.email,
-        address: store.address,
-        deliveryFee: store.deliveryFee,
-        minOrderAmount: store.minOrderAmount,
+        name: store.name || '',
+        description: store.description || '',
+        phone: store.phone || '',
+        email: store.email || '',
+        address: store.address || '',
+        deliveryFee: store.deliveryFee || 0,
+        minOrderAmount: store.minOrderAmount || 0,
         logoUrl: store.logoUrl || '',
         bannerUrl: store.bannerUrl || '',
         primaryColor: store.primaryColor || '#3b82f6',
-        settings: store.settings, // 기존 설정 유지
         isOrderingPaused: store.isOrderingPaused || false,
         pausedReason: store.pausedReason || '',
+        settings: {
+          autoAcceptOrders: store.settings?.autoAcceptOrders ?? false,
+          estimatedDeliveryTime: store.settings?.estimatedDeliveryTime ?? 30,
+          paymentMethods: store.settings?.paymentMethods ?? ['앱결제', '만나서카드'],
+          enableReviews: store.settings?.enableReviews ?? true,
+          enableCoupons: store.settings?.enableCoupons ?? false,
+          enableNotices: store.settings?.enableNotices ?? true,
+          enableEvents: store.settings?.enableEvents ?? true,
+          deliverySettings: {
+            provider: store.settings?.deliverySettings?.provider || 'manual',
+            shopId: store.settings?.deliverySettings?.shopId || '',
+            apiKey: store.settings?.deliverySettings?.apiKey || '',
+            apiSecret: store.settings?.deliverySettings?.apiSecret || ''
+          }
+        }
       });
     }
   }, [store]);

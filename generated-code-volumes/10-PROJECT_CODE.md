@@ -1,627 +1,405 @@
 ﻿# Project Code Volume 10
 
-Generated: 2025-12-23 14:30:55
+Generated: 2025-12-24 14:30:56
 Root: D:\projectsing\S-Delivery-AppV3\
 
-- Files in volume: 19
-- Approx size: 0.07 MB
+- Files in volume: 21
+- Approx size: 0.08 MB
 
 ---
 
-## File: generate-code-docs.ps1
+## File: functions\src\utils\dateKST.ts
+
+```typescript
+/**
+ * KST Date Helpers
+ */
+
+export function getYesterdayKSTRange() {
+    const now = new Date();
+    // UTC+9
+    const kstOffset = 9 * 60 * 60 * 1000;
+    const nowKST = new Date(now.getTime() + kstOffset);
+
+    // Yesterday
+    const yesterdayKST = new Date(nowKST);
+    yesterdayKST.setDate(yesterdayKST.getDate() - 1);
+
+    const yyyy = yesterdayKST.getFullYear();
+    const mm = String(yesterdayKST.getMonth() + 1).padStart(2, '0');
+    const dd = String(yesterdayKST.getDate()).padStart(2, '0');
+    const dateKey = `${yyyy}-${mm}-${dd}`;
+
+    // KST Start/End
+    const startKST = new Date(`${dateKey}T00:00:00+09:00`);
+    const endKST = new Date(`${dateKey}T23:59:59.999+09:00`);
+
+    return { startKST, endKST, dateKey };
+}
+
+```
+
+---
+
+## File: scripts\generate-multi-project-code.ps1
 
 ```powershell
-# Project Code Documentation Generator
-# Creates 10 MD files with all source code
+# Generate code volumes for multiple projects
+# Windows PowerShell 5.1 compatible
+
+param(
+    [string[]]$ProjectPaths = @(
+        "D:\projectsing\S-Delivery-App",
+        "D:\projectsing\hyun-poong\simple-delivery-app"
+    ),
+    [int]$VolumeCount = 10,
+    [string]$OutputRootFolder = "multi-project-code-volumes",
+    [string[]]$ExcludeDirs = @(
+        "node_modules","dist","build",".git",".vscode",".pnpm-store",
+        "coverage",".cache",".next","out","generated-code-docs","project-code-docs","docs"
+    ),
+    [switch]$IncludeDocs,
+    [switch]$IncludeLocks
+)
 
 $ErrorActionPreference = "Stop"
 
-# Create output folder
-$outputFolder = "generated-code-docs"
-if (Test-Path $outputFolder) {
-    Remove-Item $outputFolder -Recurse -Force
-}
-New-Item -ItemType Directory -Path $outputFolder | Out-Null
-
-Write-Host "Starting code documentation generation..." -ForegroundColor Green
-
-# Collect all source files (excluding node_modules, dist)
-$files = Get-ChildItem -Path "src" -Recurse -File -Include "*.ts","*.tsx","*.js","*.jsx","*.css","*.json" |
-    Where-Object { $_.FullName -notmatch "node_modules|dist|build" } |
-    Sort-Object FullName
-
-Write-Host "Found $($files.Count) files" -ForegroundColor Cyan
-
-# 파일을 카테고리별로 그룹화
-$categories = @{
-    "01-Config-And-Entry" = @("main.tsx", "App.tsx", "index.css", "vite-env.d.ts", "package.json", "firebase.json", "firestore.indexes.json", "firestore.rules", "storage.rules")
-    "02-Type-Definitions" = @("types\")
-    "03-Context-State" = @("contexts\")
-    "04-Custom-Hooks" = @("hooks\")
-    "05-Service-Layer" = @("services\")
-    "06-Library-Utils" = @("lib\", "utils\", "devtools\")
-    "07-Page-Main" = @("pages\WelcomePage.tsx", "pages\LoginPage.tsx", "pages\SignupPage.tsx", "pages\MyPage.tsx", "pages\MenuPage.tsx", "pages\CartPage.tsx", "pages\CheckoutPage.tsx", "pages\OrdersPage.tsx", "pages\OrderDetailPage.tsx", "pages\NoticePage.tsx", "pages\StoreSetupWizard.tsx")
-    "08-Page-Admin" = @("pages\admin\")
-    "09-Component-Common-UI" = @("components\common\", "components\ui\")
-    "10-Component-Features" = @("components\menu\", "components\review\", "components\notice\", "components\event\", "components\admin\", "components\figma\", "data\")
-}
-
-# Generate MD file for each category
-$categoryIndex = 1
-foreach ($category in $categories.Keys | Sort-Object) {
-    $patterns = $categories[$category]
-    $mdContent = @()
-    $mdContent += "# $category"
-    $mdContent += ""
-    $currentDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $mdContent += "Generated: $currentDate"
-    $mdContent += ""
-    $mdContent += "---"
-    $mdContent += ""
-
-    $categoryFiles = @()
-    foreach ($pattern in $patterns) {
-        if ($pattern.EndsWith("\")) {
-            # 디렉토리 패턴
-            $categoryFiles += $files | Where-Object { $_.FullName -like "*\$pattern*" }
-        } else {
-            # 파일 패턴
-            $categoryFiles += $files | Where-Object { $_.FullName -like "*\$pattern" }
-        }
-    }
-
-    $categoryFiles = $categoryFiles | Sort-Object FullName | Select-Object -Unique
-
-    Write-Host "Category '$category': $($categoryFiles.Count) files" -ForegroundColor Yellow
-
-    foreach ($file in $categoryFiles) {
-        $relativePath = $file.FullName.Replace((Get-Location).Path + "\", "")
-        $mdContent += "## File: $relativePath"
-        $mdContent += ""
-        
-        # 파일 확장자에 따른 언어 지정
-        $extension = $file.Extension.ToLower()
-        $language = switch ($extension) {
-            ".tsx" { "typescript" }
-            ".ts" { "typescript" }
-            ".jsx" { "javascript" }
-            ".js" { "javascript" }
-            ".css" { "css" }
-            ".json" { "json" }
-            default { "" }
-        }
-
-        try {
-            $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
-            $mdContent += '```' + $language
-            $mdContent += $content
-            $mdContent += '```'
-            $mdContent += ""
-            $mdContent += "---"
-            $mdContent += ""
-        } catch {
-            $errorMsg = $_.Exception.Message
-            $mdContent += "Warning: Cannot read file - $errorMsg"
-            $mdContent += ""
-            $mdContent += "---"
-            $mdContent += ""
-        }
-    }
-
-    # MD 파일 저장
-    $outputFile = Join-Path $outputFolder "$category.md"
-    $mdContent | Out-File -FilePath $outputFile -Encoding UTF8
-    Write-Host "생성됨: $outputFile" -ForegroundColor Green
-}
-
-# Generate index file
-$indexContent = @()
-$indexContent += "# Project Code Documentation Index"
-$indexContent += ""
-$indexDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-$indexContent += "Generated: $indexDate"
-$indexContent += ""
-$indexContent += "## Document List"
-$indexContent += ""
-
-foreach ($category in $categories.Keys | Sort-Object) {
-    $indexContent += "- [$category](./$category.md)"
-}
-
-$indexContent += ""
-$indexContent += "## Project Statistics"
-$indexContent += ""
-$totalFiles = $files.Count
-$totalDocs = $categories.Count
-$indexContent += "- Total Files: $totalFiles"
-$indexContent += "- Total Documents: $totalDocs"
-
-$indexFile = Join-Path $outputFolder "00-INDEX.md"
-$indexContent | Out-File -FilePath $indexFile -Encoding UTF8
-
+Write-Host "===========================================================" -ForegroundColor Cyan
+Write-Host "Multi-Project Code Volume Generator" -ForegroundColor Green
+Write-Host "===========================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Documentation generation completed!" -ForegroundColor Green
-Write-Host "Output folder: $outputFolder" -ForegroundColor Cyan
-$totalGenerated = $categories.Count + 1
-Write-Host "Total $totalGenerated MD files generated." -ForegroundColor Cyan
 
-```
+# Extensions to include
+$includeExts = @(
+    ".ts", ".tsx", ".js", ".jsx",
+    ".cjs", ".mjs",
+    ".json", ".html",
+    ".css", ".scss", ".less",
+    ".ps1", ".psm1", ".psd1",
+    ".yaml", ".yml",
+    ".rules"
+)
+if ($IncludeDocs) { $includeExts += ".md" }
 
----
+# Binary extensions to exclude
+$excludeBinaryExts = @(
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tiff",
+    ".woff", ".woff2", ".ttf", ".eot",
+    ".mp4", ".mp3", ".webm"
+)
 
-## File: index.html
-
-```html
-<!DOCTYPE html>
-<html lang="ko">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <title>Simple Delivery App</title>
-</head>
-
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
-</body>
-
-</html>
-```
-
----
-
-## File: src\components\common\NotificationGuide.tsx
-
-```typescript
-import { useState, useEffect } from 'react';
-import { Bell, X } from 'lucide-react';
-import Button from './Button';
-
-const STORAGE_KEY = 'notification_guide_dismissed';
-
-export default function NotificationGuide() {
-  const [show, setShow] = useState(false);
-  const [permission, setPermission] = useState<NotificationPermission>('default');
-
-  useEffect(() => {
-    // 브라우저가 알림을 지원하지 않으면 표시하지 않음
-    if (!('Notification' in window)) {
-      return;
-    }
-
-    // 이미 dismiss 했으면 표시하지 않음
-    const dismissed = localStorage.getItem(STORAGE_KEY);
-    if (dismissed === 'true') {
-      return;
-    }
-
-    // 현재 권한 상태 확인
-    setPermission(Notification.permission);
-
-    // 권한이 default일 때만 배너 표시
-    if (Notification.permission === 'default') {
-      setShow(true);
-    }
-  }, []);
-
-  const handleRequestPermission = async () => {
-    try {
-      const result = await Notification.requestPermission();
-      setPermission(result);
-      
-      if (result === 'granted') {
-        setShow(false);
-        localStorage.setItem(STORAGE_KEY, 'true');
-      } else if (result === 'denied') {
-        setShow(false);
-        localStorage.setItem(STORAGE_KEY, 'true');
-      }
-    } catch (error) {
-      console.error('알림 권한 요청 실패:', error);
-    }
-  };
-
-  const handleDismiss = () => {
-    setShow(false);
-    localStorage.setItem(STORAGE_KEY, 'true');
-  };
-
-  if (!show) return null;
-
-  return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg animate-slide-down">
-      <div className="container mx-auto px-4 py-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex-shrink-0 w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-              <Bell className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="font-semibold">주문 알림을 받으시겠습니까?</p>
-              <p className="text-sm text-blue-100">주문 상태가 변경되면 실시간으로 알려드립니다</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={handleRequestPermission}
-              variant="outline"
-              size="sm"
-              className="bg-white text-blue-600 hover:bg-blue-50 border-0"
-            >
-              허용
-            </Button>
-            <button
-              onClick={handleDismiss}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-              aria-label="닫기"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+# Names to exclude explicitly
+$excludeFilesByName = @()
+if (-not $IncludeLocks) {
+    $excludeFilesByName += @("pnpm-lock.yaml", "yarn.lock", "package-lock.json")
 }
 
-```
-
----
-
-## File: src\components\menu\MenuDetailModal.tsx
-
-```typescript
-import { useState } from 'react';
-import { X, Plus, Minus, ShoppingCart } from 'lucide-react';
-import { Menu, MenuOption } from '../../types/menu';
-import { useCart } from '../../contexts/CartContext';
-import { toast } from 'sonner';
-import Button from '../common/Button';
-import Badge from '../common/Badge';
-
-interface MenuDetailModalProps {
-  menu: Menu;
-  onClose: () => void;
+function Get-LanguageFromExtension([string]$ext) {
+    switch ($ext.ToLower()) {
+        ".ts"   { "typescript" }
+        ".tsx"  { "typescript" }
+        ".js"   { "javascript" }
+        ".jsx"  { "javascript" }
+        ".cjs"  { "javascript" }
+        ".mjs"  { "javascript" }
+        ".json" { "json" }
+        ".html" { "html" }
+        ".css"  { "css" }
+        ".scss" { "scss" }
+        ".less" { "less" }
+        ".ps1"  { "powershell" }
+        ".psm1" { "powershell" }
+        ".psd1" { "powershell" }
+        ".yaml" { "yaml" }
+        ".yml"  { "yaml" }
+        ".rules" { "" }
+        ".md"   { "markdown" }
+        default  { "" }
+    }
 }
 
-export default function MenuDetailModal({ menu, onClose }: MenuDetailModalProps) {
-  const { addItem } = useCart();
-  const [quantity, setQuantity] = useState(1);
-  const [selectedOptions, setSelectedOptions] = useState<MenuOption[]>([]);
+function Get-SafeFolderName([string]$path) {
+    $basename = Split-Path -Leaf $path
+    return $basename -replace '[\\/:*?"<>|]', '_'
+}
 
-  const toggleOption = (option: MenuOption) => {
-    setSelectedOptions(prev => {
-      const exists = prev.find(opt => opt.id === option.id);
-      if (exists) {
-        return prev.filter(opt => opt.id !== option.id);
-      } else {
-        return [...prev, { ...option, quantity: 1 }];
-      }
-    });
-  };
+function Process-Project([string]$projectPath, [string]$outputRoot, [int]$volCount) {
+    Write-Host ""
+    Write-Host "-----------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "Processing Project: $projectPath" -ForegroundColor Green
+    Write-Host "-----------------------------------------------------------" -ForegroundColor Yellow
 
-  const updateOptionQuantity = (optionId: string, delta: number) => {
-    setSelectedOptions(prev => {
-      return prev.map(opt => {
-        if (opt.id === optionId) {
-          const newQuantity = (opt.quantity || 1) + delta;
-          if (newQuantity < 1) return opt; // Minimum 1
-          return { ...opt, quantity: newQuantity };
+    if (-not (Test-Path $projectPath)) {
+        Write-Host "ERROR: Project path does not exist: $projectPath" -ForegroundColor Red
+        return
+    }
+
+    $safeName = Get-SafeFolderName $projectPath
+    $projectOutputFolder = Join-Path $outputRoot $safeName
+
+    # Normalize path
+    if (-not $projectPath.EndsWith('\')) { $projectPath = $projectPath + '\' }
+
+    # Collect files
+    $files = Get-ChildItem -Path $projectPath -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            # Exclude directories
+            $excludeHit = $false
+            foreach ($dir in $ExcludeDirs) {
+                if ($_.FullName -match "\\$([regex]::Escape($dir))(\\|$)") { $excludeHit = $true; break }
+            }
+            if ($excludeHit) { return $false }
+            # Include only selected extensions and exclude binaries
+            ($includeExts -contains $_.Extension.ToLower()) -and -not ($excludeBinaryExts -contains $_.Extension.ToLower())
+        } |
+        Where-Object { $excludeFilesByName -notcontains $_.Name } |
+        Sort-Object FullName
+
+    if ($files.Count -eq 0) {
+        Write-Host "WARNING: No files found in project: $projectPath" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Found $($files.Count) files to include." -ForegroundColor Cyan
+
+    # Ensure output folder fresh
+    if (Test-Path $projectOutputFolder) {
+        Remove-Item $projectOutputFolder -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $projectOutputFolder | Out-Null
+
+    # Prepare volume containers with greedy size balancing
+    $volumes = @()
+    for ($i = 1; $i -le $volCount; $i++) {
+        $volumes += [PSCustomObject]@{ Index = $i; Files = New-Object System.Collections.Generic.List[object]; Size = [long]0 }
+    }
+
+    # Sort files by size descending for better balancing
+    $filesInfo = $files | Select-Object FullName, Length, Extension
+    $filesSorted = $filesInfo | Sort-Object Length -Descending
+
+    foreach ($f in $filesSorted) {
+        # pick the volume with the smallest current size
+        $minIdx = 0
+        $minSize = [long]::MaxValue
+        for ($i = 0; $i -lt $volumes.Count; $i++) {
+            if ($volumes[$i].Size -lt $minSize) { $minSize = $volumes[$i].Size; $minIdx = $i }
         }
-        return opt;
-      });
-    });
-  };
-
-  const getTotalPrice = () => {
-    const optionsPrice = selectedOptions.reduce((sum, opt) => sum + (opt.price * (opt.quantity || 1)), 0);
-    return (menu.price + optionsPrice) * quantity;
-  };
-
-  const handleAddToCart = () => {
-    if (menu.soldout) {
-      toast.error('품절된 메뉴입니다');
-      return;
+        $volumes[$minIdx].Files.Add($f)
+        $volumes[$minIdx].Size += [long]$f.Length
     }
 
-    addItem({
-      menuId: menu.id,
-      name: menu.name,
-      price: menu.price,
-      quantity,
-      options: selectedOptions,
-      imageUrl: menu.imageUrl,
-    });
+    # Write each volume markdown
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 
-    toast.success(`${menu.name}을(를) 장바구니에 담았습니다`);
-    onClose();
-  };
+    foreach ($v in $volumes) {
+        $indexStr = "{0:D2}" -f $v.Index
+        $outFile = Join-Path $projectOutputFolder "$indexStr-PROJECT_CODE.md"
+        $md = New-Object System.Collections.Generic.List[string]
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 animate-fade-in">
-      <div
-        className="relative w-full max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl max-h-[90vh] overflow-hidden animate-slide-up"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center bg-white/90 backdrop-blur-sm rounded-full shadow-lg hover:bg-white transition-colors"
-        >
-          <X className="w-5 h-5 text-gray-600" />
-        </button>
+        $md.Add("# $safeName - Volume $indexStr")
+        $md.Add("")
+        $md.Add("Generated: $timestamp")
+        $md.Add("Project Path: $projectPath")
+        $md.Add("")
+        $md.Add("- Files in volume: $($v.Files.Count)")
+        $md.Add("- Approx size: $([Math]::Round($v.Size / 1MB, 2)) MB")
+        $md.Add("")
+        $md.Add("---")
+        $md.Add("")
 
-        <div className="overflow-y-auto max-h-[90vh]">
-          {/* Image */}
-          <div className="relative aspect-[16/9] bg-gray-100">
-            {menu.imageUrl ? (
-              <img
-                src={menu.imageUrl}
-                alt={menu.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400">
-                <span className="text-8xl">🍜</span>
-              </div>
-            )}
+        foreach ($fi in $v.Files | Sort-Object FullName) {
+            $relative = $fi.FullName.Replace($projectPath, "")
+            $lang = Get-LanguageFromExtension $fi.Extension
+            $md.Add("## File: $relative")
+            $md.Add("")
+            try {
+                $content = Get-Content -Path $fi.FullName -Raw -Encoding UTF8
+                $md.Add('```' + $lang)
+                $md.Add($content)
+                $md.Add('```')
+            } catch {
+                $md.Add("Warning: Cannot read file - $($_.Exception.Message)")
+            }
+            $md.Add("")
+            $md.Add("---")
+            $md.Add("")
+        }
 
-            {menu.soldout && (
-              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <Badge variant="danger" size="lg">
-                  품절
-                </Badge>
-              </div>
-            )}
-          </div>
+        $md | Out-File -FilePath $outFile -Encoding UTF8
+        Write-Host "  Created: $outFile" -ForegroundColor Green
+    }
 
-          {/* Content */}
-          <div className="p-6">
-            {/* Header */}
-            <div className="mb-4">
-              <div className="flex flex-wrap gap-2 mb-2">
-                {menu.category.map((cat) => (
-                  <Badge key={cat} variant="primary">
-                    {cat}
-                  </Badge>
-                ))}
-              </div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">{menu.name}</h2>
-              <p className="text-gray-600">{menu.description}</p>
-            </div>
+    # Write index file for this project
+    $indexMd = New-Object System.Collections.Generic.List[string]
+    $indexMd.Add("# $safeName - Code Volumes Index")
+    $indexMd.Add("")
+    $indexMd.Add("Generated: $timestamp")
+    $indexMd.Add("Project Path: $projectPath")
+    $indexMd.Add("")
+    $indexMd.Add("## Volumes")
+    $indexMd.Add("")
+    foreach ($v in ($volumes | Sort-Object Index)) {
+        $indexStr = "{0:D2}" -f $v.Index
+        $indexMd.Add("- [$indexStr-PROJECT_CODE.md](./$indexStr-PROJECT_CODE.md) — Files: $($v.Files.Count), Size: $([Math]::Round($v.Size / 1MB, 2)) MB")
+    }
+    $indexMd.Add("")
+    $indexMd.Add("## Totals")
+    $indexMd.Add("")
+    $totalFiles = ($volumes | ForEach-Object { $_.Files.Count } | Measure-Object -Sum).Sum
+    $totalSize = ($volumes | ForEach-Object { $_.Size } | Measure-Object -Sum).Sum
+    $indexMd.Add("- Total Files: $totalFiles")
+    $indexMd.Add("- Total Size: $([Math]::Round($totalSize / 1MB, 2)) MB")
+    $indexMd.Add("- Volume Count: $volCount")
 
-            {/* Price */}
-            <div className="mb-6 pb-6 border-b border-gray-200">
-              <span className="text-3xl font-bold text-blue-600">
-                {menu.price.toLocaleString()}
-              </span>
-              <span className="text-lg text-gray-600 ml-2">원</span>
-            </div>
-
-            {/* Options */}
-            {menu.options && menu.options.length > 0 && (
-              <div className="mb-6 pb-6 border-b border-gray-200">
-                <h3 className="font-semibold text-gray-900 mb-3">옵션 선택</h3>
-                <div className="space-y-2">
-                  {menu.options.map((option) => {
-                    const selected = selectedOptions.find(opt => opt.id === option.id);
-                    return (
-                      <div
-                        key={option.id}
-                        className={`
-                          w-full rounded-lg border-2 transition-all overflow-hidden
-                          ${selected
-                            ? 'border-blue-500 bg-white'
-                            : 'border-gray-200 hover:border-gray-300'
-                          }
-                        `}
-                      >
-                        <button
-                          onClick={() => toggleOption(option)}
-                          className="w-full flex items-center justify-between p-4 text-left"
-                        >
-                          <span className="font-medium text-gray-900">{option.name}</span>
-                          <span className={`${selected ? 'text-blue-600' : 'text-gray-900'} font-semibold`}>
-                            +{option.price.toLocaleString()}원
-                          </span>
-                        </button>
-
-                        {selected && option.quantity !== undefined && (
-                          <div className="flex items-center justify-between bg-blue-50 p-3 border-t border-blue-100 animate-slide-down">
-                            <span className="text-sm text-blue-800 font-medium ml-1">수량</span>
-                            <div className="flex items-center bg-white rounded-lg border border-blue-200 shadow-sm">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  updateOptionQuantity(option.id, -1);
-                                }}
-                                className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-blue-600 hover:bg-gray-50 rounded-l-lg transition-colors"
-                              >
-                                <Minus className="w-4 h-4" />
-                              </button>
-                              <span className="w-8 text-center text-sm font-bold text-gray-900">
-                                {selected.quantity || 1}
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  updateOptionQuantity(option.id, 1);
-                                }}
-                                className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-blue-600 hover:bg-gray-50 rounded-r-lg transition-colors"
-                              >
-                                <Plus className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Quantity */}
-            <div className="mb-6">
-              <h3 className="font-semibold text-gray-900 mb-3">수량</h3>
-              <div className="flex items-center space-x-4">
-                <button
-                  onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="w-10 h-10 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:text-blue-600 transition-colors"
-                >
-                  <Minus className="w-5 h-5" />
-                </button>
-                <span className="text-2xl font-bold text-gray-900 min-w-[3rem] text-center">
-                  {quantity}
-                </span>
-                <button
-                  onClick={() => setQuantity(quantity + 1)}
-                  className="w-10 h-10 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:text-blue-600 transition-colors"
-                >
-                  <Plus className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Total & Add to Cart */}
-            <div className="flex items-center gap-4">
-              <div className="flex-1">
-                <p className="text-sm text-gray-600 mb-1">총 금액</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {getTotalPrice().toLocaleString()}원
-                </p>
-              </div>
-              <Button
-                size="lg"
-                onClick={handleAddToCart}
-                disabled={menu.soldout}
-                className="flex-1"
-              >
-                <ShoppingCart className="w-5 h-5 mr-2" />
-                장바구니 담기
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+    $indexFile = Join-Path $projectOutputFolder "00-INDEX.md"
+    $indexMd | Out-File -FilePath $indexFile -Encoding UTF8
+    Write-Host "  Index written: $indexFile" -ForegroundColor Cyan
+    Write-Host ""
 }
+
+# Ensure root output folder exists
+if (Test-Path $OutputRootFolder) {
+    Remove-Item $OutputRootFolder -Recurse -Force
+}
+New-Item -ItemType Directory -Path $OutputRootFolder | Out-Null
+
+# Process each project
+foreach ($proj in $ProjectPaths) {
+    Process-Project -projectPath $proj -outputRoot $OutputRootFolder -volCount $VolumeCount
+}
+
+# Write master index
+$masterIndexMd = New-Object System.Collections.Generic.List[string]
+$masterTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$masterIndexMd.Add("# Multi-Project Code Volumes - Master Index")
+$masterIndexMd.Add("")
+$masterIndexMd.Add("Generated: $masterTimestamp")
+$masterIndexMd.Add("")
+$masterIndexMd.Add("## Projects")
+$masterIndexMd.Add("")
+
+foreach ($proj in $ProjectPaths) {
+    $safeName = Get-SafeFolderName $proj
+    $projectFolder = Join-Path $OutputRootFolder $safeName
+    if (Test-Path $projectFolder) {
+        $masterIndexMd.Add("### $safeName")
+        $masterIndexMd.Add("")
+        $masterIndexMd.Add("Path: ``$proj``")
+        $masterIndexMd.Add("")
+        $masterIndexMd.Add("Index: [$safeName/00-INDEX.md](./$safeName/00-INDEX.md)")
+        $masterIndexMd.Add("")
+    }
+}
+
+$masterIndexFile = Join-Path $OutputRootFolder "00-MASTER-INDEX.md"
+$masterIndexMd | Out-File -FilePath $masterIndexFile -Encoding UTF8
+
+Write-Host "===========================================================" -ForegroundColor Cyan
+Write-Host "All projects processed!" -ForegroundColor Green
+Write-Host "Master Index: $masterIndexFile" -ForegroundColor Cyan
+Write-Host "Output Folder: $OutputRootFolder" -ForegroundColor Cyan
+Write-Host "===========================================================" -ForegroundColor Cyan
+
 ```
 
 ---
 
-## File: src\components\review\ReviewList.test.tsx
+## File: src\components\review\ReviewPreview.tsx
 
 ```typescript
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import ReviewList from './ReviewList';
+import { Link } from 'react-router-dom';
+import { Star, ChevronRight, User } from 'lucide-react';
 import { useStore } from '../../contexts/StoreContext';
 import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { getAllReviewsQuery } from '../../services/reviewService';
+import { Review } from '../../types/review';
+import { formatDate } from '../../utils/formatDate';
+import Card from '../common/Card';
 
-// Mocks
-vi.mock('../../contexts/StoreContext', () => ({
-    useStore: vi.fn(),
-}));
+export default function ReviewPreview() {
+    const { store } = useStore();
+    const storeId = store?.id;
 
-vi.mock('../../hooks/useFirestoreCollection', () => ({
-    useFirestoreCollection: vi.fn(),
-}));
+    // Fetch reviews (sorted by newest First)
+    const { data: reviews, loading } = useFirestoreCollection<Review>(
+        storeId ? getAllReviewsQuery(storeId) : null
+    );
 
-vi.mock('../../services/reviewService', () => ({
-    getAllReviewsQuery: vi.fn(),
-}));
+    // Take only top 5 for preview
+    const recentReviews = reviews ? reviews.slice(0, 5) : [];
 
-vi.mock('../../utils/formatDate', () => ({
-    formatDate: (date: any) => '2024-01-01',
-}));
+    if (!storeId || loading) return null;
 
-// Mock Lucide
-vi.mock('lucide-react', () => ({
-    Star: ({ className }: any) => <span className={className}>Star</span>,
-    User: () => <span>User</span>,
-}));
+    if (recentReviews.length === 0) {
+        return null; // hide if no reviews
+    }
 
-describe('ReviewList', () => {
-    const mockStore = { id: 'store_1' };
+    return (
+        <div className="container mx-auto px-4 mt-8 mb-12">
+            <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                    <span className="text-primary-600">💬</span>
+                    <span>생생 리뷰 미리보기</span>
+                </h2>
+                <Link
+                    to="/reviews"
+                    className="text-sm text-gray-500 hover:text-primary-600 flex items-center gap-1"
+                >
+                    더보기 <ChevronRight className="w-4 h-4" />
+                </Link>
+            </div>
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        (useStore as any).mockReturnValue({ store: mockStore });
-        // Default safe return
-        (useFirestoreCollection as any).mockReturnValue({ data: [], loading: false });
-    });
+            <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-4 snap-x snap-mandatory">
+                {recentReviews.map((review) => (
+                    <div key={review.id} className="min-w-[280px] w-[280px] snap-start">
+                        <Card
+                            className="h-full flex flex-col p-4 bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow cursor-pointer group overflow-hidden"
+                            padding="none"
+                        >
+                            {/* Image if available */}
+                            {review.images && review.images.length > 0 && (
+                                <div className="relative w-full h-32 overflow-hidden bg-gray-100">
+                                    <img
+                                        src={review.images[0]}
+                                        alt="Review"
+                                        className="w-full h-full object-cover transform transition-all duration-500 group-hover:scale-110 group-hover:brightness-105"
+                                    />
+                                </div>
+                            )}
 
-    it('should render nothing if no store', () => {
-        (useStore as any).mockReturnValue({ store: null });
-        // Even with null store, hook might be called or component returns early. 
-        // If hook is called, it needs return value.
-        const { container } = render(<ReviewList />);
-        expect(container).toBeEmptyDOMElement();
-    });
+                            <div className="p-4 flex-1 flex flex-col">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                                            <User className="w-4 h-4 text-blue-600" />
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-semibold text-gray-900 truncate max-w-[100px]">
+                                                {review.userDisplayName}
+                                            </span>
+                                            <div className="flex items-center">
+                                                <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                                                <span className="text-xs font-bold ml-1">{review.rating}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <span className="text-xs text-gray-400">{formatDate(review.createdAt)}</span>
+                                </div>
 
-    it('should render loading state', () => {
-        (useFirestoreCollection as any).mockReturnValue({
-            data: [],
-            loading: true,
-        });
-        render(<ReviewList />);
-        expect(screen.getByText('리뷰를 불러오는 중...')).toBeInTheDocument();
-    });
-
-    it('should render empty state', () => {
-        (useFirestoreCollection as any).mockReturnValue({
-            data: [],
-            loading: false,
-        });
-        render(<ReviewList />);
-        expect(screen.getByText('아직 작성된 리뷰가 없습니다')).toBeInTheDocument();
-    });
-
-    it('should render reviews and statistics', () => {
-        const mockReviews = [
-            {
-                id: 'review_1',
-                rating: 5,
-                comment: 'Great!',
-                userDisplayName: 'User A',
-                createdAt: '2024-01-01',
-                images: []
-            },
-            {
-                id: 'review_2',
-                rating: 3,
-                comment: 'Okay',
-                userDisplayName: 'User B',
-                createdAt: '2024-01-02',
-                images: ['img.jpg']
-            }
-        ];
-
-        (useFirestoreCollection as any).mockReturnValue({
-            data: mockReviews,
-            loading: false,
-        });
-
-        render(<ReviewList />);
-
-        // Statistics: Avg (5+3)/2 = 4.0
-        expect(screen.getByText('4.0')).toBeInTheDocument();
-        expect(screen.getByText('총 2개의 리뷰')).toBeInTheDocument();
-
-        // Review content
-        expect(screen.getByText('Great!')).toBeInTheDocument();
-        expect(screen.getByText('Okay')).toBeInTheDocument();
-
-        // Check "1개" (rating count) appears
-        const countElements = screen.getAllByText('1개');
-        expect(countElements.length).toBeGreaterThanOrEqual(1);
-    });
-});
+                                <div className="flex-1">
+                                    <p className="text-sm text-gray-600 line-clamp-3 break-words">
+                                        {review.comment}
+                                    </p>
+                                </div>
+                            </div>
+                        </Card>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
 
 ```
 
@@ -681,198 +459,599 @@ export { Badge, badgeVariants };
 
 ---
 
-## File: src\components\ui\form.tsx
+## File: src\components\ui\breadcrumb.tsx
+
+```typescript
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot@1.1.2";
+import { ChevronRight, MoreHorizontal } from "lucide-react@0.487.0";
+
+import { cn } from "./utils";
+
+function Breadcrumb({ ...props }: React.ComponentProps<"nav">) {
+  return <nav aria-label="breadcrumb" data-slot="breadcrumb" {...props} />;
+}
+
+function BreadcrumbList({ className, ...props }: React.ComponentProps<"ol">) {
+  return (
+    <ol
+      data-slot="breadcrumb-list"
+      className={cn(
+        "text-muted-foreground flex flex-wrap items-center gap-1.5 text-sm break-words sm:gap-2.5",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
+  return (
+    <li
+      data-slot="breadcrumb-item"
+      className={cn("inline-flex items-center gap-1.5", className)}
+      {...props}
+    />
+  );
+}
+
+function BreadcrumbLink({
+  asChild,
+  className,
+  ...props
+}: React.ComponentProps<"a"> & {
+  asChild?: boolean;
+}) {
+  const Comp = asChild ? Slot : "a";
+
+  return (
+    <Comp
+      data-slot="breadcrumb-link"
+      className={cn("hover:text-foreground transition-colors", className)}
+      {...props}
+    />
+  );
+}
+
+function BreadcrumbPage({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="breadcrumb-page"
+      role="link"
+      aria-disabled="true"
+      aria-current="page"
+      className={cn("text-foreground font-normal", className)}
+      {...props}
+    />
+  );
+}
+
+function BreadcrumbSeparator({
+  children,
+  className,
+  ...props
+}: React.ComponentProps<"li">) {
+  return (
+    <li
+      data-slot="breadcrumb-separator"
+      role="presentation"
+      aria-hidden="true"
+      className={cn("[&>svg]:size-3.5", className)}
+      {...props}
+    >
+      {children ?? <ChevronRight />}
+    </li>
+  );
+}
+
+function BreadcrumbEllipsis({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="breadcrumb-ellipsis"
+      role="presentation"
+      aria-hidden="true"
+      className={cn("flex size-9 items-center justify-center", className)}
+      {...props}
+    >
+      <MoreHorizontal className="size-4" />
+      <span className="sr-only">More</span>
+    </span>
+  );
+}
+
+export {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+  BreadcrumbEllipsis,
+};
+
+```
+
+---
+
+## File: src\components\ui\carousel.tsx
 
 ```typescript
 "use client";
 
 import * as React from "react";
-import * as LabelPrimitive from "@radix-ui/react-label@2.1.2";
-import { Slot } from "@radix-ui/react-slot@1.1.2";
-import {
-  Controller,
-  FormProvider,
-  useFormContext,
-  useFormState,
-  type ControllerProps,
-  type FieldPath,
-  type FieldValues,
-} from "react-hook-form@7.55.0";
+import useEmblaCarousel, {
+  type UseEmblaCarouselType,
+} from "embla-carousel-react@8.6.0";
+import { ArrowLeft, ArrowRight } from "lucide-react@0.487.0";
 
 import { cn } from "./utils";
-import { Label } from "./label";
+import { Button } from "./button";
 
-const Form = FormProvider;
+type CarouselApi = UseEmblaCarouselType[1];
+type UseCarouselParameters = Parameters<typeof useEmblaCarousel>;
+type CarouselOptions = UseCarouselParameters[0];
+type CarouselPlugin = UseCarouselParameters[1];
 
-type FormFieldContextValue<
-  TFieldValues extends FieldValues = FieldValues,
-  TName extends FieldPath<TFieldValues> = FieldPath<TFieldValues>,
-> = {
-  name: TName;
+type CarouselProps = {
+  opts?: CarouselOptions;
+  plugins?: CarouselPlugin;
+  orientation?: "horizontal" | "vertical";
+  setApi?: (api: CarouselApi) => void;
 };
 
-const FormFieldContext = React.createContext<FormFieldContextValue>(
-  {} as FormFieldContextValue,
-);
+type CarouselContextProps = {
+  carouselRef: ReturnType<typeof useEmblaCarousel>[0];
+  api: ReturnType<typeof useEmblaCarousel>[1];
+  scrollPrev: () => void;
+  scrollNext: () => void;
+  canScrollPrev: boolean;
+  canScrollNext: boolean;
+} & CarouselProps;
 
-const FormField = <
-  TFieldValues extends FieldValues = FieldValues,
-  TName extends FieldPath<TFieldValues> = FieldPath<TFieldValues>,
->({
-  ...props
-}: ControllerProps<TFieldValues, TName>) => {
-  return (
-    <FormFieldContext.Provider value={{ name: props.name }}>
-      <Controller {...props} />
-    </FormFieldContext.Provider>
-  );
-};
+const CarouselContext = React.createContext<CarouselContextProps | null>(null);
 
-const useFormField = () => {
-  const fieldContext = React.useContext(FormFieldContext);
-  const itemContext = React.useContext(FormItemContext);
-  const { getFieldState } = useFormContext();
-  const formState = useFormState({ name: fieldContext.name });
-  const fieldState = getFieldState(fieldContext.name, formState);
+function useCarousel() {
+  const context = React.useContext(CarouselContext);
 
-  if (!fieldContext) {
-    throw new Error("useFormField should be used within <FormField>");
+  if (!context) {
+    throw new Error("useCarousel must be used within a <Carousel />");
   }
 
-  const { id } = itemContext;
+  return context;
+}
 
-  return {
-    id,
-    name: fieldContext.name,
-    formItemId: `${id}-form-item`,
-    formDescriptionId: `${id}-form-item-description`,
-    formMessageId: `${id}-form-item-message`,
-    ...fieldState,
-  };
-};
+function Carousel({
+  orientation = "horizontal",
+  opts,
+  setApi,
+  plugins,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"div"> & CarouselProps) {
+  const [carouselRef, api] = useEmblaCarousel(
+    {
+      ...opts,
+      axis: orientation === "horizontal" ? "x" : "y",
+    },
+    plugins,
+  );
+  const [canScrollPrev, setCanScrollPrev] = React.useState(false);
+  const [canScrollNext, setCanScrollNext] = React.useState(false);
 
-type FormItemContextValue = {
-  id: string;
-};
+  const onSelect = React.useCallback((api: CarouselApi) => {
+    if (!api) return;
+    setCanScrollPrev(api.canScrollPrev());
+    setCanScrollNext(api.canScrollNext());
+  }, []);
 
-const FormItemContext = React.createContext<FormItemContextValue>(
-  {} as FormItemContextValue,
-);
+  const scrollPrev = React.useCallback(() => {
+    api?.scrollPrev();
+  }, [api]);
 
-function FormItem({ className, ...props }: React.ComponentProps<"div">) {
-  const id = React.useId();
+  const scrollNext = React.useCallback(() => {
+    api?.scrollNext();
+  }, [api]);
+
+  const handleKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        scrollPrev();
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        scrollNext();
+      }
+    },
+    [scrollPrev, scrollNext],
+  );
+
+  React.useEffect(() => {
+    if (!api || !setApi) return;
+    setApi(api);
+  }, [api, setApi]);
+
+  React.useEffect(() => {
+    if (!api) return;
+    onSelect(api);
+    api.on("reInit", onSelect);
+    api.on("select", onSelect);
+
+    return () => {
+      api?.off("select", onSelect);
+    };
+  }, [api, onSelect]);
 
   return (
-    <FormItemContext.Provider value={{ id }}>
+    <CarouselContext.Provider
+      value={{
+        carouselRef,
+        api: api,
+        opts,
+        orientation:
+          orientation || (opts?.axis === "y" ? "vertical" : "horizontal"),
+        scrollPrev,
+        scrollNext,
+        canScrollPrev,
+        canScrollNext,
+      }}
+    >
       <div
-        data-slot="form-item"
-        className={cn("grid gap-2", className)}
+        onKeyDownCapture={handleKeyDown}
+        className={cn("relative", className)}
+        role="region"
+        aria-roledescription="carousel"
+        data-slot="carousel"
+        {...props}
+      >
+        {children}
+      </div>
+    </CarouselContext.Provider>
+  );
+}
+
+function CarouselContent({ className, ...props }: React.ComponentProps<"div">) {
+  const { carouselRef, orientation } = useCarousel();
+
+  return (
+    <div
+      ref={carouselRef}
+      className="overflow-hidden"
+      data-slot="carousel-content"
+    >
+      <div
+        className={cn(
+          "flex",
+          orientation === "horizontal" ? "-ml-4" : "-mt-4 flex-col",
+          className,
+        )}
         {...props}
       />
-    </FormItemContext.Provider>
+    </div>
   );
 }
 
-function FormLabel({
+function CarouselItem({ className, ...props }: React.ComponentProps<"div">) {
+  const { orientation } = useCarousel();
+
+  return (
+    <div
+      role="group"
+      aria-roledescription="slide"
+      data-slot="carousel-item"
+      className={cn(
+        "min-w-0 shrink-0 grow-0 basis-full",
+        orientation === "horizontal" ? "pl-4" : "pt-4",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function CarouselPrevious({
+  className,
+  variant = "outline",
+  size = "icon",
+  ...props
+}: React.ComponentProps<typeof Button>) {
+  const { orientation, scrollPrev, canScrollPrev } = useCarousel();
+
+  return (
+    <Button
+      data-slot="carousel-previous"
+      variant={variant}
+      size={size}
+      className={cn(
+        "absolute size-8 rounded-full",
+        orientation === "horizontal"
+          ? "top-1/2 -left-12 -translate-y-1/2"
+          : "-top-12 left-1/2 -translate-x-1/2 rotate-90",
+        className,
+      )}
+      disabled={!canScrollPrev}
+      onClick={scrollPrev}
+      {...props}
+    >
+      <ArrowLeft />
+      <span className="sr-only">Previous slide</span>
+    </Button>
+  );
+}
+
+function CarouselNext({
+  className,
+  variant = "outline",
+  size = "icon",
+  ...props
+}: React.ComponentProps<typeof Button>) {
+  const { orientation, scrollNext, canScrollNext } = useCarousel();
+
+  return (
+    <Button
+      data-slot="carousel-next"
+      variant={variant}
+      size={size}
+      className={cn(
+        "absolute size-8 rounded-full",
+        orientation === "horizontal"
+          ? "top-1/2 -right-12 -translate-y-1/2"
+          : "-bottom-12 left-1/2 -translate-x-1/2 rotate-90",
+        className,
+      )}
+      disabled={!canScrollNext}
+      onClick={scrollNext}
+      {...props}
+    >
+      <ArrowRight />
+      <span className="sr-only">Next slide</span>
+    </Button>
+  );
+}
+
+export {
+  type CarouselApi,
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselPrevious,
+  CarouselNext,
+};
+
+```
+
+---
+
+## File: src\components\ui\collapsible.tsx
+
+```typescript
+"use client";
+
+import * as CollapsiblePrimitive from "@radix-ui/react-collapsible@1.1.3";
+
+function Collapsible({
+  ...props
+}: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
+  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />;
+}
+
+function CollapsibleTrigger({
+  ...props
+}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
+  return (
+    <CollapsiblePrimitive.CollapsibleTrigger
+      data-slot="collapsible-trigger"
+      {...props}
+    />
+  );
+}
+
+function CollapsibleContent({
+  ...props
+}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
+  return (
+    <CollapsiblePrimitive.CollapsibleContent
+      data-slot="collapsible-content"
+      {...props}
+    />
+  );
+}
+
+export { Collapsible, CollapsibleTrigger, CollapsibleContent };
+
+```
+
+---
+
+## File: src\components\ui\dialog.tsx
+
+```typescript
+"use client";
+
+import * as React from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog@1.1.6";
+import { XIcon } from "lucide-react@0.487.0";
+
+import { cn } from "./utils";
+
+function Dialog({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+}
+
+function DialogTrigger({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
+  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;
+}
+
+function DialogPortal({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Portal>) {
+  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
+}
+
+function DialogClose({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Close>) {
+  return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
+}
+
+function DialogOverlay({
   className,
   ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
-  const { error, formItemId } = useFormField();
-
+}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
   return (
-    <Label
-      data-slot="form-label"
-      data-error={!!error}
-      className={cn("data-[error=true]:text-destructive", className)}
-      htmlFor={formItemId}
+    <DialogPrimitive.Overlay
+      data-slot="dialog-overlay"
+      className={cn(
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+        className,
+      )}
       {...props}
     />
   );
 }
 
-function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
-  const { error, formItemId, formDescriptionId, formMessageId } =
-    useFormField();
-
+function DialogContent({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
-    <Slot
-      data-slot="form-control"
-      id={formItemId}
-      aria-describedby={
-        !error
-          ? `${formDescriptionId}`
-          : `${formDescriptionId} ${formMessageId}`
-      }
-      aria-invalid={!!error}
+    <DialogPortal data-slot="dialog-portal">
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        data-slot="dialog-content"
+        className={cn(
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        <DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
+          <XIcon />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  );
+}
+
+function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-header"
+      className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
       {...props}
     />
   );
 }
 
-function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
-  const { formDescriptionId } = useFormField();
-
+function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <p
-      data-slot="form-description"
-      id={formDescriptionId}
+    <div
+      data-slot="dialog-footer"
+      className={cn(
+        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function DialogTitle({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Title>) {
+  return (
+    <DialogPrimitive.Title
+      data-slot="dialog-title"
+      className={cn("text-lg leading-none font-semibold", className)}
+      {...props}
+    />
+  );
+}
+
+function DialogDescription({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Description>) {
+  return (
+    <DialogPrimitive.Description
+      data-slot="dialog-description"
       className={cn("text-muted-foreground text-sm", className)}
       {...props}
     />
   );
 }
 
-function FormMessage({ className, ...props }: React.ComponentProps<"p">) {
-  const { error, formMessageId } = useFormField();
-  const body = error ? String(error?.message ?? "") : props.children;
-
-  if (!body) {
-    return null;
-  }
-
-  return (
-    <p
-      data-slot="form-message"
-      id={formMessageId}
-      className={cn("text-destructive text-sm", className)}
-      {...props}
-    >
-      {body}
-    </p>
-  );
-}
-
 export {
-  useFormField,
-  Form,
-  FormItem,
-  FormLabel,
-  FormControl,
-  FormDescription,
-  FormMessage,
-  FormField,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
 };
 
 ```
 
 ---
 
-## File: src\components\ui\input.tsx
+## File: src\components\ui\drawer.tsx
 
 ```typescript
+"use client";
+
 import * as React from "react";
+import { Drawer as DrawerPrimitive } from "vaul@1.1.2";
 
 import { cn } from "./utils";
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+function Drawer({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Root>) {
+  return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+}
+
+function DrawerTrigger({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
+  return <DrawerPrimitive.Trigger data-slot="drawer-trigger" {...props} />;
+}
+
+function DrawerPortal({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Portal>) {
+  return <DrawerPrimitive.Portal data-slot="drawer-portal" {...props} />;
+}
+
+function DrawerClose({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Close>) {
+  return <DrawerPrimitive.Close data-slot="drawer-close" {...props} />;
+}
+
+function DrawerOverlay({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Overlay>) {
   return (
-    <input
-      type={type}
-      data-slot="input"
+    <DrawerPrimitive.Overlay
+      data-slot="drawer-overlay"
       className={cn(
-        "file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base bg-input-background transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
-        "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-        "aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
         className,
       )}
       {...props}
@@ -880,568 +1059,656 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   );
 }
 
-export { Input };
+function DrawerContent({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+  return (
+    <DrawerPortal data-slot="drawer-portal">
+      <DrawerOverlay />
+      <DrawerPrimitive.Content
+        data-slot="drawer-content"
+        className={cn(
+          "group/drawer-content bg-background fixed z-50 flex h-auto flex-col",
+          "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[80vh] data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b",
+          "data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:max-h-[80vh] data-[vaul-drawer-direction=bottom]:rounded-t-lg data-[vaul-drawer-direction=bottom]:border-t",
+          "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm",
+          "data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-3/4 data-[vaul-drawer-direction=left]:border-r data-[vaul-drawer-direction=left]:sm:max-w-sm",
+          className,
+        )}
+        {...props}
+      >
+        <div className="bg-muted mx-auto mt-4 hidden h-2 w-[100px] shrink-0 rounded-full group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
+        {children}
+      </DrawerPrimitive.Content>
+    </DrawerPortal>
+  );
+}
+
+function DrawerHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="drawer-header"
+      className={cn("flex flex-col gap-1.5 p-4", className)}
+      {...props}
+    />
+  );
+}
+
+function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="drawer-footer"
+      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
+      {...props}
+    />
+  );
+}
+
+function DrawerTitle({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Title>) {
+  return (
+    <DrawerPrimitive.Title
+      data-slot="drawer-title"
+      className={cn("text-foreground font-semibold", className)}
+      {...props}
+    />
+  );
+}
+
+function DrawerDescription({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Description>) {
+  return (
+    <DrawerPrimitive.Description
+      data-slot="drawer-description"
+      className={cn("text-muted-foreground text-sm", className)}
+      {...props}
+    />
+  );
+}
+
+export {
+  Drawer,
+  DrawerPortal,
+  DrawerOverlay,
+  DrawerTrigger,
+  DrawerClose,
+  DrawerContent,
+  DrawerHeader,
+  DrawerFooter,
+  DrawerTitle,
+  DrawerDescription,
+};
 
 ```
 
 ---
 
-## File: src\components\ui\scroll-area.tsx
+## File: src\components\ui\skeleton.tsx
+
+```typescript
+import { cn } from "./utils";
+
+function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="skeleton"
+      className={cn("bg-accent animate-pulse rounded-md", className)}
+      {...props}
+    />
+  );
+}
+
+export { Skeleton };
+
+```
+
+---
+
+## File: src\components\ui\switch.tsx
 
 ```typescript
 "use client";
 
 import * as React from "react";
-import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area@1.2.3";
+import * as SwitchPrimitive from "@radix-ui/react-switch@1.1.3";
 
 import { cn } from "./utils";
 
-function ScrollArea({
+function Switch({
   className,
-  children,
   ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
+}: React.ComponentProps<typeof SwitchPrimitive.Root>) {
   return (
-    <ScrollAreaPrimitive.Root
-      data-slot="scroll-area"
-      className={cn("relative", className)}
-      {...props}
-    >
-      <ScrollAreaPrimitive.Viewport
-        data-slot="scroll-area-viewport"
-        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
-      >
-        {children}
-      </ScrollAreaPrimitive.Viewport>
-      <ScrollBar />
-      <ScrollAreaPrimitive.Corner />
-    </ScrollAreaPrimitive.Root>
-  );
-}
-
-function ScrollBar({
-  className,
-  orientation = "vertical",
-  ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
-  return (
-    <ScrollAreaPrimitive.ScrollAreaScrollbar
-      data-slot="scroll-area-scrollbar"
-      orientation={orientation}
+    <SwitchPrimitive.Root
+      data-slot="switch"
       className={cn(
-        "flex touch-none p-px transition-colors select-none",
-        orientation === "vertical" &&
-          "h-full w-2.5 border-l border-l-transparent",
-        orientation === "horizontal" &&
-          "h-2.5 flex-col border-t border-t-transparent",
+        "peer data-[state=checked]:bg-primary data-[state=unchecked]:bg-switch-background focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-input/80 inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent transition-all outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb
-        data-slot="scroll-area-thumb"
-        className="bg-border relative flex-1 rounded-full"
+      <SwitchPrimitive.Thumb
+        data-slot="switch-thumb"
+        className={cn(
+          "bg-card dark:data-[state=unchecked]:bg-card-foreground dark:data-[state=checked]:bg-primary-foreground pointer-events-none block size-4 rounded-full ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0",
+        )}
       />
-    </ScrollAreaPrimitive.ScrollAreaScrollbar>
+    </SwitchPrimitive.Root>
   );
 }
 
-export { ScrollArea, ScrollBar };
+export { Switch };
 
 ```
 
 ---
 
-## File: src\data\mockMenus.ts
+## File: src\components\ui\tabs.tsx
 
 ```typescript
-import { Menu } from '../types/menu';
+"use client";
 
-export const mockMenus: Menu[] = [
-  {
-    id: '1',
-    name: '소고기 쌀국수',
-    price: 9500,
-    category: ['인기메뉴', '기본메뉴'],
-    description: '부드러운 소고기와 신선한 야채가 들어간 정통 베트남 쌀국수입니다. 진한 육수가 일품입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt1', name: '면 추가', price: 2000 },
-      { id: 'opt2', name: '고기 추가', price: 3000 },
-      { id: 'opt3', name: '야채 추가', price: 1500 },
-    ],
-    createdAt: new Date('2024-01-01'),
-  },
-  {
-    id: '2',
-    name: '해물 쌀국수',
-    price: 11000,
-    category: ['인기메뉴', '추천메뉴'],
-    description: '신선한 새우, 오징어, 조개가 듬뿍 들어간 푸짐한 해물 쌀국수입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1555126634-323283e090fa?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt1', name: '면 추가', price: 2000 },
-      { id: 'opt4', name: '해물 추가', price: 4000 },
-    ],
-    createdAt: new Date('2024-01-01'),
-  },
-  {
-    id: '3',
-    name: '닭고기 쌀국수',
-    price: 8500,
-    category: ['기본메뉴'],
-    description: '담백한 닭고기로 만든 건강한 쌀국수입니다. 깔끔한 맛을 원하시는 분께 추천합니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt1', name: '면 추가', price: 2000 },
-      { id: 'opt5', name: '닭고기 추가', price: 2500 },
-    ],
-    createdAt: new Date('2024-01-01'),
-  },
-  {
-    id: '4',
-    name: '베지테리언 쌀국수',
-    price: 8000,
-    category: ['기본메뉴', '추천메뉴'],
-    description: '신선한 야채만으로 만든 건강한 채식 쌀국수입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt1', name: '면 추가', price: 2000 },
-      { id: 'opt3', name: '야채 추가', price: 1500 },
-    ],
-    createdAt: new Date('2024-01-01'),
-  },
-  {
-    id: '5',
-    name: '월남쌈',
-    price: 7000,
-    category: ['사이드메뉴', '인기메뉴'],
-    description: '신선한 야채와 새우를 라이스 페이퍼로 감싼 건강한 월남쌈입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1559054663-e8fbaa5b6c53?w=800&q=80',
-    soldout: false,
-    options: [],
-    createdAt: new Date('2024-01-02'),
-  },
-  {
-    id: '6',
-    name: '분짜',
-    price: 10000,
-    category: ['기본메뉴'],
-    description: '숯불에 구운 돼지고기와 쌀국수를 특제 소스에 찍어 먹는 베트남 요리입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt6', name: '돼지고기 추가', price: 3000 },
-    ],
-    createdAt: new Date('2024-01-02'),
-  },
-  {
-    id: '7',
-    name: '짜조',
-    price: 6000,
-    category: ['사이드메뉴'],
-    description: '바삭하게 튀긴 베트남식 스프링롤입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?w=800&q=80',
-    soldout: false,
-    options: [],
-    createdAt: new Date('2024-01-02'),
-  },
-  {
-    id: '8',
-    name: '베트남 커피',
-    price: 4500,
-    category: ['음료', '인기메뉴'],
-    description: '진한 베트남식 연유 커피입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?w=800&q=80',
-    soldout: false,
-    options: [
-      { id: 'opt7', name: '아이스', price: 500 },
-    ],
-    createdAt: new Date('2024-01-03'),
-  },
-  {
-    id: '9',
-    name: '코코넛 주스',
-    price: 3500,
-    category: ['음료'],
-    description: '신선한 코코넛 주스입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1608023136037-626dad6c6188?w=800&q=80',
-    soldout: false,
-    options: [],
-    createdAt: new Date('2024-01-03'),
-  },
-  {
-    id: '10',
-    name: '사이공 맥주',
-    price: 5000,
-    category: ['주류'],
-    description: '베트남 대표 맥주 사이공입니다.',
-    imageUrl: 'https://images.unsplash.com/photo-1608270586620-248524c67de9?w=800&q=80',
-    soldout: false,
-    options: [],
-    createdAt: new Date('2024-01-03'),
-  },
-];
+import * as React from "react";
+import * as TabsPrimitive from "@radix-ui/react-tabs@1.1.3";
+
+import { cn } from "./utils";
+
+function Tabs({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Root>) {
+  return (
+    <TabsPrimitive.Root
+      data-slot="tabs"
+      className={cn("flex flex-col gap-2", className)}
+      {...props}
+    />
+  );
+}
+
+function TabsList({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.List>) {
+  return (
+    <TabsPrimitive.List
+      data-slot="tabs-list"
+      className={cn(
+        "bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-xl p-[3px] flex",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function TabsTrigger({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+  return (
+    <TabsPrimitive.Trigger
+      data-slot="tabs-trigger"
+      className={cn(
+        "data-[state=active]:bg-card dark:data-[state=active]:text-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:outline-ring dark:data-[state=active]:border-input dark:data-[state=active]:bg-input/30 text-foreground dark:text-muted-foreground inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:outline-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function TabsContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Content>) {
+  return (
+    <TabsPrimitive.Content
+      data-slot="tabs-content"
+      className={cn("flex-1 outline-none", className)}
+      {...props}
+    />
+  );
+}
+
+export { Tabs, TabsList, TabsTrigger, TabsContent };
 
 ```
 
 ---
 
-## File: src\firebase.json
+## File: src\components\ui\toggle.tsx
 
-```json
-{
-  "hosting": {
-    "public": "dist",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ],
-    "headers": [
-      {
-        "source": "/index.html",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          }
-        ]
+```typescript
+"use client";
+
+import * as React from "react";
+import * as TogglePrimitive from "@radix-ui/react-toggle@1.1.2";
+import { cva, type VariantProps } from "class-variance-authority@0.7.1";
+
+import { cn } from "./utils";
+
+const toggleVariants = cva(
+  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium hover:bg-muted hover:text-muted-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] outline-none transition-[color,box-shadow] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive whitespace-nowrap",
+  {
+    variants: {
+      variant: {
+        default: "bg-transparent",
+        outline:
+          "border border-input bg-transparent hover:bg-accent hover:text-accent-foreground",
       },
-      {
-        "source": "/static/**",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "public, max-age=31536000, immutable"
-          }
-        ]
-      }
-    ]
+      size: {
+        default: "h-9 px-2 min-w-9",
+        sm: "h-8 px-1.5 min-w-8",
+        lg: "h-10 px-2.5 min-w-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
   },
-  "firestore": {
-    "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
-  }
-}
-
-```
-
----
-
-## File: src\hooks\useFirebaseAuth.ts
-
-```typescript
-import { useState, useEffect } from 'react';
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  onAuthStateChanged,
-  updateProfile,
-  User as FirebaseUser
-} from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
-
-interface User {
-  id: string;
-  email: string;
-  displayName?: string;
-  phone?: string;
-}
-
-// 데모 계정 정보
-const DEMO_ACCOUNTS = {
-  'user@demo.com': {
-    password: 'demo123',
-    id: 'demo-user-001',
-    email: 'user@demo.com',
-    displayName: '데모 사용자',
-    isAdmin: false,
-  },
-  'admin@demo.com': {
-    password: 'admin123',
-    id: 'demo-admin-001',
-    email: 'admin@demo.com',
-    displayName: '관리자',
-    isAdmin: true,
-  },
-};
-
-export function useFirebaseAuth() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // 데모 모드 확인
-  const isDemoMode = auth.app.options.apiKey === 'demo-api-key';
-
-  useEffect(() => {
-    // 데모 모드인 경우 로컬 스토리지에서 사용자 정보 로드
-    if (isDemoMode) {
-      const demoUser = localStorage.getItem('demoUser');
-      if (demoUser) {
-        setUser(JSON.parse(demoUser));
-      }
-      setLoading(false);
-      return;
-    }
-
-    // Firebase 인증 모드
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Firestore에서 추가 정보(phone 등) 가져오기
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const userDoc = await getDoc(userRef);
-        const userData = userDoc.data();
-
-        setUser({
-          id: firebaseUser.uid,
-          email: firebaseUser.email || '',
-          displayName: userData?.displayName || firebaseUser.displayName || undefined, // Firestore 데이터 우선
-          phone: userData?.phone || undefined,
-        });
-
-        // Firestore에 사용자 문서 생성 (없으면)
-        if (!userDoc.exists()) {
-          await ensureUserDocument(firebaseUser);
-        }
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [isDemoMode]);
-
-  const signup = async (email: string, password: string, displayName?: string, phone?: string) => {
-    // 데모 모드
-    if (isDemoMode) {
-      // 데모 모드에서는 회원가입 시뮬레이션
-      const newUser: User = {
-        id: `demo-user-${Date.now()}`,
-        email,
-        displayName: displayName || email.split('@')[0],
-        phone: phone || '010-0000-0000',
-      };
-      setUser(newUser);
-      localStorage.setItem('demoUser', JSON.stringify(newUser));
-      localStorage.setItem('demoIsAdmin', 'false');
-      return;
-    }
-
-    // Firebase 모드
-    try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-
-      // 프로필 업데이트
-      if (displayName && userCredential.user) {
-        await updateProfile(userCredential.user, { displayName });
-      }
-
-      // Firestore에 사용자 문서 생성
-      await createUserDocument(userCredential.user, displayName, phone);
-
-      return userCredential.user;
-    } catch (error) {
-      const errorCode = (error as { code?: string }).code || 'unknown';
-      throw new Error(getAuthErrorMessage(errorCode));
-    }
-  };
-
-  const login = async (email: string, password: string) => {
-    // 데모 모드
-    if (isDemoMode) {
-      const demoAccount = DEMO_ACCOUNTS[email as keyof typeof DEMO_ACCOUNTS];
-
-      if (!demoAccount) {
-        throw new Error('존재하지 않는 사용자입니다. 데모 계정을 사용해주세요:\n- user@demo.com / demo123\n- admin@demo.com / admin123');
-      }
-
-      if (demoAccount.password !== password) {
-        throw new Error('잘못된 비밀번호입니다');
-      }
-
-      // 데모 계정 로그인
-      const { id, email: demoEmail, displayName, isAdmin } = demoAccount;
-      const demoUser: User = { id, email: demoEmail, displayName };
-
-      setUser(demoUser);
-      localStorage.setItem('demoUser', JSON.stringify(demoUser));
-      localStorage.setItem('demoIsAdmin', String(isAdmin));
-
-      return;
-    }
-
-    // Firebase 모드
-    try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      return userCredential.user;
-    } catch (error) {
-      const errorCode = (error as { code?: string }).code || 'unknown';
-      throw new Error(getAuthErrorMessage(errorCode));
-    }
-  };
-
-  const logout = async () => {
-    // 데모 모드
-    if (isDemoMode) {
-      setUser(null);
-      localStorage.removeItem('demoUser');
-      localStorage.removeItem('demoIsAdmin');
-      return;
-    }
-
-    // Firebase 모드
-    try {
-      await firebaseSignOut(auth);
-    } catch (error) {
-      throw new Error('로그아웃에 실패했습니다');
-    }
-  };
-
-  return { user, loading, signup, login, logout };
-}
-
-// Firestore에 사용자 문서 생성
-async function createUserDocument(firebaseUser: FirebaseUser, displayName?: string, phone?: string) {
-  const userRef = doc(db, 'users', firebaseUser.uid);
-
-  await setDoc(userRef, {
-    email: firebaseUser.email,
-    displayName: displayName || firebaseUser.email?.split('@')[0] || '',
-    phone: phone || '',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  }, { merge: true });
-}
-
-// 사용자 문서 확인 및 생성
-async function ensureUserDocument(firebaseUser: FirebaseUser) {
-  const userRef = doc(db, 'users', firebaseUser.uid);
-  const userDoc = await getDoc(userRef);
-
-  if (!userDoc.exists()) {
-    await createUserDocument(firebaseUser, firebaseUser.displayName || undefined);
-  }
-}
-
-// Firebase 에러 메시지 한글화
-function getAuthErrorMessage(errorCode: string): string {
-  const errorMessages: Record<string, string> = {
-    'auth/email-already-in-use': '이미 사용 중인 이메일입니다',
-    'auth/invalid-email': '올바른 이메일 형식이 아닙니다',
-    'auth/operation-not-allowed': '이메일/비밀번호 로그인이 비활성화되어 있습니다',
-    'auth/weak-password': '비밀번호는 최소 6자 이상이어야 합니다',
-    'auth/user-disabled': '비활성화된 계정입니다',
-    'auth/user-not-found': '존재하지 않는 사용자입니다',
-    'auth/wrong-password': '잘못된 비밀번호입니다',
-    'auth/too-many-requests': '너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요',
-    'auth/network-request-failed': '네트워크 오류가 발생했습니다',
-  };
-
-  return errorMessages[errorCode] || '인증 오류가 발생했습니다';
-}
-```
-
----
-
-## File: src\lib\firebase.ts
-
-```typescript
-import { initializeApp } from 'firebase/app';
-import { getAnalytics } from 'firebase/analytics';
-import { getAuth } from 'firebase/auth';
-import { initializeFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-import { getMessaging, isSupported } from 'firebase/messaging';
-
-// Firebase 설정
-// .env 파일에서 환경 변수를 불러옵니다
-// .env.example 파일을 참고하여 .env.local 파일을 생성하세요
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
-};
-
-// 필수 환경 변수 검증
-const requiredEnvVars = [
-  'VITE_FIREBASE_API_KEY',
-  'VITE_FIREBASE_AUTH_DOMAIN',
-  'VITE_FIREBASE_PROJECT_ID',
-  'VITE_FIREBASE_STORAGE_BUCKET',
-  'VITE_FIREBASE_MESSAGING_SENDER_ID',
-  'VITE_FIREBASE_APP_ID',
-] as const;
-
-const missingVars = requiredEnvVars.filter(
-  (varName) => !import.meta.env[varName]
 );
 
-if (missingVars.length > 0) {
-  console.error(
-    '❌ Firebase 환경 변수가 설정되지 않았습니다:',
-    missingVars.join(', ')
+function Toggle({
+  className,
+  variant,
+  size,
+  ...props
+}: React.ComponentProps<typeof TogglePrimitive.Root> &
+  VariantProps<typeof toggleVariants>) {
+  return (
+    <TogglePrimitive.Root
+      data-slot="toggle"
+      className={cn(toggleVariants({ variant, size, className }))}
+      {...props}
+    />
   );
-  console.error(
-    '💡 .env.example 파일을 참고하여 .env.local 파일을 생성하고 Firebase 설정을 추가하세요.'
+}
+
+export { Toggle, toggleVariants };
+
+```
+
+---
+
+## File: src\lib\firestoreExamples.ts
+
+```typescript
+/**
+ * Firestore 데이터 격리 사용 예제
+ * 실제 코드에서 이렇게 사용하세요
+ */
+
+import { db } from '../config/firebase';
+import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { getMenusPath, getOrdersPath, getCouponsPath, getReviewsPath } from './firestorePaths';
+
+/**
+ * ❌ 잘못된 방법 (멀티 테넌트 미지원)
+ */
+export async function getBadMenus() {
+  const snapshot = await getDocs(collection(db, 'menus'));
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+/**
+ * ✅ 올바른 방법 (멀티 테넌트 지원)
+ */
+export async function getGoodMenus(storeId: string) {
+  const snapshot = await getDocs(collection(db, getMenusPath(storeId)));
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+/**
+ * 예제 1: 메뉴 조회
+ */
+export async function getMenusByStore(storeId: string) {
+  // ❌ const menusRef = collection(db, 'menus');
+  // ✅ 
+  const menusRef = collection(db, getMenusPath(storeId));
+  const snapshot = await getDocs(menusRef);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+/**
+ * 예제 2: 메뉴 추가
+ */
+export async function addMenu(storeId: string, menuData: any) {
+  // ❌ const menusRef = collection(db, 'menus');
+  // ✅
+  const menusRef = collection(db, getMenusPath(storeId));
+  return await addDoc(menusRef, menuData);
+}
+
+/**
+ * 예제 3: 주문 조회 (사용자별)
+ */
+export async function getUserOrders(storeId: string, userId: string) {
+  // ❌ const ordersRef = collection(db, 'orders');
+  // ✅
+  const ordersRef = collection(db, getOrdersPath(storeId));
+  const q = query(ordersRef, where('userId', '==', userId));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+/**
+ * 예제 4: 쿠폰 조회
+ */
+export async function getActiveCoupons(storeId: string) {
+  // ❌ const couponsRef = collection(db, 'coupons');
+  // ✅
+  const couponsRef = collection(db, getCouponsPath(storeId));
+  const q = query(couponsRef, where('active', '==', true));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+/**
+ * 예제 5: 리뷰 추가
+ */
+export async function addReview(storeId: string, reviewData: any) {
+  // ❌ const reviewsRef = collection(db, 'reviews');
+  // ✅
+  const reviewsRef = collection(db, getReviewsPath(storeId));
+  return await addDoc(reviewsRef, reviewData);
+}
+
+/**
+ * 사용 예시:
+ * 
+ * // StoreContext에서 storeId 가져오기
+ * const { storeId } = useStore();
+ * 
+ * // 메뉴 조회
+ * const menus = await getMenusByStore(storeId);
+ * 
+ * // 주문 조회
+ * const orders = await getUserOrders(storeId, user.uid);
+ */
+
+```
+
+---
+
+## File: src\lib\storeAccess.ts
+
+```typescript
+/**
+ * 상점 접근 권한 관리 유틸리티
+ * adminStores 컬렉션을 통해 관리자-상점 매핑 관리
+ */
+
+import { db } from './firebase';
+import { collection, query, where, getDocs, addDoc, deleteDoc, doc } from 'firebase/firestore';
+import { AdminStore, StorePermission } from '../types/store';
+
+/**
+ * 관리자가 접근 가능한 상점 목록 조회
+ */
+export async function getAdminStores(adminUid: string): Promise<AdminStore[]> {
+  // adminUid 유효성 검사
+  if (!adminUid || typeof adminUid !== 'string') {
+    console.warn('getAdminStores called with invalid adminUid:', adminUid);
+    return [];
+  }
+
+  try {
+    const q = query(
+      collection(db, 'adminStores'),
+      where('adminUid', '==', adminUid)
+    );
+    
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+    })) as AdminStore[];
+  } catch (error) {
+    console.error('Error in getAdminStores:', error);
+    return [];
+  }
+}
+
+/**
+ * 특정 상점의 관리자 목록 조회
+ */
+export async function getStoreAdmins(storeId: string): Promise<AdminStore[]> {
+  const q = query(
+    collection(db, 'adminStores'),
+    where('storeId', '==', storeId)
   );
-  throw new Error(
-    `Firebase 환경 변수가 누락되었습니다: ${missingVars.join(', ')}`
-  );
+  
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+  })) as AdminStore[];
 }
 
-// Firebase 초기화
-let app;
-try {
-  app = initializeApp(firebaseConfig);
-} catch (error) {
-  console.error('❌ Firebase 초기화 실패:', error);
-  throw new Error('Firebase 초기화에 실패했습니다. 환경 변수를 확인하세요.');
+/**
+ * 관리자가 특정 상점에 접근 가능한지 확인
+ */
+export async function hasStoreAccess(
+  adminUid: string,
+  storeId: string
+): Promise<boolean> {
+  const adminStores = await getAdminStores(adminUid);
+  return adminStores.some(as => as.storeId === storeId);
 }
 
-// Firebase 서비스 초기화
-export const auth = getAuth(app);
-export const db = initializeFirestore(app, {
-  ignoreUndefinedProperties: true
-});
-export const storage = getStorage(app);
-
-// Firebase Analytics (브라우저 환경에서만)
-let analytics: any = null;
-if (typeof window !== 'undefined') {
-  analytics = getAnalytics(app);
+/**
+ * 관리자가 특정 권한을 가지고 있는지 확인
+ */
+export async function hasPermission(
+  adminUid: string,
+  storeId: string,
+  permission: StorePermission
+): Promise<boolean> {
+  const adminStores = await getAdminStores(adminUid);
+  const adminStore = adminStores.find(as => as.storeId === storeId);
+  
+  if (!adminStore) return false;
+  
+  // owner는 모든 권한 보유
+  if (adminStore.role === 'owner') return true;
+  
+  return adminStore.permissions.includes(permission);
 }
-export { analytics };
 
-// Firebase Cloud Messaging (FCM) - 선택적
-let messaging: any = null;
-if (typeof window !== 'undefined') {
-  isSupported().then((supported) => {
-    if (supported) {
-      messaging = getMessaging(app);
-    }
-  });
+/**
+ * 관리자를 상점에 추가
+ */
+export async function addAdminToStore(
+  adminUid: string,
+  storeId: string,
+  role: 'owner' | 'manager' | 'staff',
+  permissions: StorePermission[]
+): Promise<string> {
+  const adminStoreData = {
+    adminUid,
+    storeId,
+    role,
+    permissions,
+    createdAt: new Date(),
+  };
+  
+  const docRef = await addDoc(collection(db, 'adminStores'), adminStoreData);
+  return docRef.id;
 }
-export { messaging };
 
-export default app;
+/**
+ * 상점에서 관리자 제거
+ */
+export async function removeAdminFromStore(adminStoreId: string): Promise<void> {
+  await deleteDoc(doc(db, 'adminStores', adminStoreId));
+}
+
+/**
+ * 기본 권한 세트
+ */
+export const DEFAULT_PERMISSIONS: Record<string, StorePermission[]> = {
+  owner: [
+    'manage_menus',
+    'manage_orders',
+    'manage_coupons',
+    'manage_reviews',
+    'manage_notices',
+    'manage_events',
+    'manage_store_settings',
+    'view_analytics',
+  ],
+  manager: [
+    'manage_menus',
+    'manage_orders',
+    'manage_coupons',
+    'manage_reviews',
+    'view_analytics',
+  ],
+  staff: [
+    'manage_orders',
+    'view_analytics',
+  ],
+};
+```
+
+---
+
+## File: src\pages\admin\AdminMemberPage.tsx
+
+```typescript
+import React, { useState } from 'react';
+import { Search, User as UserIcon, Phone, Mail } from 'lucide-react';
+import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { collection, query, orderBy } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { User } from '../../types/user';
+import AdminSidebar from '../../components/admin/AdminSidebar';
+import Card from '../../components/common/Card';
+import Badge from '../../components/common/Badge';
+
+export default function AdminMemberPage() {
+    const [searchTerm, setSearchTerm] = useState('');
+
+    // Fetch all users sorted by created time (descending if possible, or just all)
+    // Note: For MVP we fetch all. For production, use server-side pagination/search.
+    const { data: users, loading } = useFirestoreCollection<User>(
+        query(collection(db, 'users'))
+    );
+
+    const filteredUsers = users?.filter(user => {
+        const term = searchTerm.toLowerCase();
+        const name = user.displayName?.toLowerCase() || '';
+        const email = user.email?.toLowerCase() || '';
+        const phone = user.phone?.toLowerCase() || '';
+
+        return name.includes(term) || email.includes(term) || phone.includes(term);
+    }) || [];
+
+    return (
+        <div className="flex min-h-screen bg-gray-50">
+            <AdminSidebar />
+
+            <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+                <div className="max-w-7xl mx-auto">
+                    {/* Header */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+                        <div>
+                            <h1 className="text-3xl mb-2 font-bold text-gray-900">회원 관리</h1>
+                            <p className="text-gray-600">등록된 회원을 검색하고 조회합니다.</p>
+                        </div>
+                    </div>
+
+                    <Card className="mb-6">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                            <input
+                                type="text"
+                                placeholder="이름, 전화번호, 또는 이메일로 검색..."
+                                className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                    </Card>
+
+                    <Card className="p-0 overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead className="bg-gray-50 border-b border-gray-100">
+                                    <tr>
+                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">회원 정보</th>
+                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">연락처</th>
+                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">가입일</th>
+                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">상태</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {loading ? (
+                                        <tr>
+                                            <td colSpan={4} className="py-8 text-center text-gray-500">로딩 중...</td>
+                                        </tr>
+                                    ) : filteredUsers.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={4} className="py-8 text-center text-gray-500">
+                                                {searchTerm ? '검색 결과가 없습니다.' : '등록된 회원이 없습니다.'}
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredUsers.map((user) => (
+                                            <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                                                <td className="py-4 px-6">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-500">
+                                                            <UserIcon className="w-5 h-5" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-gray-900">{user.displayName || '이름 없음'}</p>
+                                                            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">User</span>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="py-4 px-6">
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                            <Phone className="w-3.5 h-3.5" />
+                                                            {user.phone || '-'}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                            <Mail className="w-3.5 h-3.5" />
+                                                            {user.email}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="py-4 px-6 text-sm text-gray-500">
+                                                    {user.createdAt?.seconds
+                                                        ? new Date(user.createdAt.seconds * 1000).toLocaleDateString()
+                                                        : '-'
+                                                    }
+                                                </td>
+                                                <td className="py-4 px-6">
+                                                    <Badge variant="success">활동중</Badge>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
+                </div>
+            </main>
+        </div>
+    );
+}
+
 ```
 
 ---
@@ -2064,223 +2331,165 @@ export default function OrderDetailPage() {
 
 ---
 
-## File: src\pages\WelcomePage.tsx
+## File: src\services\menuService.ts
 
 ```typescript
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useStore } from '../contexts/StoreContext';
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  query,
+  where,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { Menu } from '../types/menu';
 
-/**
- * 인트로 페이지 (Intro / Splash Screen)
- * 앱 실행 시 잠시 로고와 상점 이름을 보여주고 메인 페이지로 이동
- */
-export default function WelcomePage() {
-  const navigate = useNavigate();
-  const { store } = useStore();
+// 컬렉션 참조 헬퍼 (stores/{storeId}/menus)
+const getMenuCollection = (storeId: string) => collection(db, 'stores', storeId, 'menus');
 
-  useEffect(() => {
-    // 2초 후 메뉴 페이지로 자동 이동
-    const timer = setTimeout(() => {
-      navigate('/menu');
-    }, 2000);
+// 메뉴 추가
+export async function createMenu(storeId: string, menuData: Omit<Menu, 'id' | 'createdAt'>) {
+  try {
+    const docRef = await addDoc(getMenuCollection(storeId), {
+      ...menuData,
+      createdAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error('메뉴 추가 실패:', error);
+    throw error;
+  }
+}
 
-    return () => clearTimeout(timer);
-  }, [navigate]);
+// 메뉴 수정
+export async function updateMenu(storeId: string, menuId: string, menuData: Partial<Menu>) {
+  try {
+    const menuRef = doc(db, 'stores', storeId, 'menus', menuId);
+    await updateDoc(menuRef, {
+      ...menuData,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('메뉴 수정 실패:', error);
+    throw error;
+  }
+}
 
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-white p-4 animate-fade-in">
-      {/* 로고 또는 대표 이미지 */}
-      {/* 로고 또는 대표 이미지 */}
-      {store?.logoUrl ? (
-        <img
-          src={store.logoUrl}
-          alt={store.name}
-          className="w-48 h-48 md:w-64 md:h-64 mb-8 rounded-3xl object-cover shadow-lg transform hover:scale-105 transition-transform duration-500"
-        />
-      ) : (
-        <div className="w-48 h-48 md:w-64 md:h-64 mb-8 rounded-3xl gradient-primary flex items-center justify-center shadow-lg transform hover:scale-105 transition-transform duration-500">
-          <span className="text-8xl md:text-9xl">🍜</span>
-        </div>
-      )}
+// 메뉴 삭제
+export async function deleteMenu(storeId: string, menuId: string) {
+  try {
+    const menuRef = doc(db, 'stores', storeId, 'menus', menuId);
+    await deleteDoc(menuRef);
+  } catch (error) {
+    console.error('메뉴 삭제 실패:', error);
+    throw error;
+  }
+}
 
-      {/* 상점 이름 */}
-      <h1 className="text-4xl md:text-5xl font-bold text-primary-600 text-center mb-2">
-        {store?.name || 'Simple Delivery'}
-      </h1>
+// 품절 상태 변경
+export async function toggleMenuSoldout(storeId: string, menuId: string, soldout: boolean) {
+  try {
+    const menuRef = doc(db, 'stores', storeId, 'menus', menuId);
+    await updateDoc(menuRef, {
+      soldout,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('품절 상태 변경 실패:', error);
+    throw error;
+  }
+}
 
-      {/* 로딩 인디케이터 (선택) */}
-      <div className="mt-8 flex gap-2">
-        <div className="w-2 h-2 bg-primary-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-        <div className="w-2 h-2 bg-primary-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-        <div className="w-2 h-2 bg-primary-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-      </div>
-    </div>
+// 숨김 상태 변경
+export async function toggleMenuHidden(storeId: string, menuId: string, isHidden: boolean) {
+  try {
+    const menuRef = doc(db, 'stores', storeId, 'menus', menuId);
+    await updateDoc(menuRef, {
+      isHidden,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('숨김 상태 변경 실패:', error);
+    throw error;
+  }
+}
+
+// Query 헬퍼 함수들
+export function getAllMenusQuery(storeId: string) {
+  return query(
+    getMenuCollection(storeId),
+    orderBy('createdAt', 'desc')
+  );
+}
+
+export function getMenusByCategoryQuery(storeId: string, category: string) {
+  return query(
+    getMenuCollection(storeId),
+    where('category', 'array-contains', category),
+    orderBy('createdAt', 'desc')
   );
 }
 ```
 
 ---
 
-## File: src\services\delivery\mockProvider.ts
+## File: src\types\notice.ts
 
 ```typescript
-import { DeliveryProvider, DeliveryRequestData, DeliveryResponse } from './types';
-import { DeliverySettings } from '../../types/store';
-
-export class MockDeliveryProvider implements DeliveryProvider {
-    async createOrder(data: DeliveryRequestData, settings: DeliverySettings): Promise<DeliveryResponse> {
-        console.log('[MockDelivery] Creating Order:', data);
-        console.log('[MockDelivery] Using Settings:', settings);
-
-        // Simulate API delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Basic Validation Mock
-        if (!settings.apiKey && settings.provider !== 'manual') {
-            return { success: false, message: 'API Key가 설정되지 않았습니다.' };
-        }
-
-        return {
-            success: true,
-            deliveryId: `MOCK-${Date.now()}`,
-            estimatedCost: 3500,
-            message: '배달 대행 요청이 접수되었습니다. (테스트)'
-        };
-    }
-
-    async cancelOrder(deliveryId: string, settings: DeliverySettings): Promise<DeliveryResponse> {
-        console.log('[MockDelivery] Cancelling Order:', deliveryId);
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        return {
-            success: true,
-            message: '배달 요청이 취소되었습니다.'
-        };
-    }
-
-    async checkStatus(deliveryId: string, settings: DeliverySettings): Promise<string> {
-        return 'PICKUP_PENDING';
-    }
-}
-
-```
-
----
-
-## File: src\types\coupon.ts
-
-```typescript
-export interface Coupon {
+export interface Notice {
   id: string;
-  code: string;
-  name: string;
-  discountType: 'percentage' | 'fixed';
-  discountValue: number;
-  minOrderAmount: number;
-  maxDiscountAmount?: number;
-  validFrom: Date;
-  validUntil: Date;
-  isActive: boolean;
+  title: string;
+  content: string;
+  category: '공지' | '이벤트' | '점검' | '할인';
+  pinned: boolean;
   createdAt: Date;
-  // 특정 회원에게만 발급된 쿠폰인 경우
-  assignedUserId?: string;
-  assignedUserName?: string;
-  assignedUserPhone?: string;
-  // 사용 여부 (1회만 사용 가능)
-  isUsed: boolean;
-  usedAt?: Date;
-  usedByUserIds?: string[]; // 이 쿠폰을 사용한 사용자 ID 목록
+  updatedAt: Date;
 }
 
-export const DISCOUNT_TYPE_LABELS = {
-  percentage: '퍼센트 할인',
-  fixed: '금액 할인',
-};
+export const NOTICE_CATEGORIES = ['공지', '이벤트', '점검', '할인'] as const;
+export type NoticeCategory = typeof NOTICE_CATEGORIES[number];
+
 ```
 
 ---
 
-## File: src\utils\formatDate.ts
+## File: tailwind.config.js
 
-```typescript
-/**
- * 날짜 포맷 유틸리티
- */
-
-/**
- * Firestore Timestamp 또는 Date를 "YYYY-MM-DD HH:mm:ss" 형식으로 변환
- */
-export function formatDate(date: Date | { toDate?: () => Date }): string {
-  const d = date instanceof Date ? date : date.toDate?.() || new Date();
-  
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const seconds = String(d.getSeconds()).padStart(2, '0');
-  
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-}
-
-/**
- * "MM/DD HH:mm" 형식으로 변환
- */
-export function formatDateShort(date: Date | { toDate?: () => Date }): string {
-  const d = date instanceof Date ? date : date.toDate?.() || new Date();
-  
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  
-  return `${month}/${day} ${hours}:${minutes}`;
-}
-
-/**
- * 상대적 시간 표시 ("방금", "5분 전", "1시간 전", "어제", "MM/DD")
- */
-export function formatDateRelative(date: Date | { toDate?: () => Date }): string {
-  const d = date instanceof Date ? date : date.toDate?.() || new Date();
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-  
-  if (seconds < 60) return '방금';
-  if (minutes < 60) return `${minutes}분 전`;
-  if (hours < 24) return `${hours}시간 전`;
-  if (days === 1) return '어제';
-  if (days < 7) return `${days}일 전`;
-  
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${month}/${day}`;
-}
-
-/**
- * 날짜를 "YYYY년 MM월 DD일" 형식으로 변환
- */
-export function formatDateKorean(date: Date | { toDate?: () => Date }): string {
-  const d = date instanceof Date ? date : date.toDate?.() || new Date();
-  
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
-  
-  return `${year}년 ${month}월 ${day}일`;
-}
-
+```javascript
+/** @type {import('tailwindcss').Config} */
 export default {
-  formatDate,
-  formatDateShort,
-  formatDateRelative,
-  formatDateKorean,
-};
+    content: [
+        "./index.html",
+        "./src/**/*.{js,ts,jsx,tsx}",
+    ],
+    theme: {
+        extend: {
+            colors: {
+                primary: {
+                    50: 'var(--color-primary-50)',
+                    100: 'var(--color-primary-100)',
+                    200: 'var(--color-primary-200)',
+                    300: 'var(--color-primary-300)',
+                    400: 'var(--color-primary-400)',
+                    500: 'var(--color-primary-500)',
+                    600: 'var(--color-primary-600)',
+                    700: 'var(--color-primary-700)',
+                    800: 'var(--color-primary-800)',
+                    900: 'var(--color-primary-900)',
+                },
+                secondary: {
+                    500: 'var(--color-secondary-500)',
+                    600: 'var(--color-secondary-600)',
+                }
+            }
+        },
+    },
+    plugins: [],
+}
 
 ```
 

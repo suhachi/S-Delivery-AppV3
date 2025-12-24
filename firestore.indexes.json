@@ -1,0 +1,41 @@
+{
+    "indexes": [
+        {
+            "collectionGroup": "menus",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "category",
+                    "arrayConfig": "CONTAINS"
+                },
+                {
+                    "fieldPath": "soldout",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "isHidden",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "notices",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "pinned",
+                    "order": "DESCENDING"
+                },
+                {
+                    "fieldPath": "createdAt",
+                    "order": "DESCENDING"
+                },
+                {
+                    "fieldPath": "__name__",
+                    "order": "DESCENDING"
+                }
+            ]
+        }
+    ],
+    "fieldOverrides": []
+}

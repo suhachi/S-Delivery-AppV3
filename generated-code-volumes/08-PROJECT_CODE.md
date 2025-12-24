@@ -1,143 +1,461 @@
 ﻿# Project Code Volume 08
 
-Generated: 2025-12-23 14:30:55
+Generated: 2025-12-24 14:30:56
 Root: D:\projectsing\S-Delivery-AppV3\
 
-- Files in volume: 19
-- Approx size: 0.07 MB
+- Files in volume: 21
+- Approx size: 0.08 MB
 
 ---
 
-## File: src\components\event\EventList.tsx
+## File: index.html
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Simple Delivery App</title>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>
+```
+
+---
+
+## File: scripts\clear_orders_only.js
+
+```javascript
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import 'dotenv/config';
+
+const firebaseConfig = {
+    apiKey: process.env.VITE_FIREBASE_API_KEY,
+    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.VITE_FIREBASE_APP_ID,
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+async function clearOrders() {
+    console.log('🧹 Clearing Order History & Stats...');
+
+    try {
+        // Target: stores/default/orders
+        const ordersRef = collection(db, 'stores', 'default', 'orders');
+        const snapshot = await getDocs(ordersRef);
+
+        if (snapshot.empty) {
+            console.log('✅ No orders to delete.');
+            process.exit(0);
+        }
+
+        console.log(`Found ${snapshot.size} orders. Deleting...`);
+
+        // Delete fake orders one by one (Client SDK limit)
+        const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
+        await Promise.all(deletePromises);
+
+        console.log('✅ All orders deleted successfully.');
+        console.log('📊 Revenue stats should now be reset to 0.');
+        console.log('🏪 Store settings and menus are PRESERVED.');
+
+    } catch (e) {
+        console.error('Error clearing orders:', e);
+    }
+    process.exit(0);
+}
+
+clearOrders();
+
+```
+
+---
+
+## File: src\components\admin\Receipt.tsx
 
 ```typescript
-import { useState } from 'react';
-import { Calendar, ChevronRight } from 'lucide-react';
+import { Order } from '../../types/order';
+import { Store } from '../../types/store';
+
+interface ReceiptProps {
+    order: Order | null;
+    store: Store | null;
+}
+
+export default function Receipt({ order, store }: ReceiptProps) {
+    if (!order) return null;
+
+    // 1. 날짜 포맷팅 (YYYY. MM. DD. 오후 h:mm)
+    const formatDate = (date: any) => {
+        const d = date?.toDate ? date.toDate() : new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0'); // User example uses 12 (no spacing, just number)
+        // Actually user example: 25. 12. 10. 오후 01:08
+        // Let's match typical Korean format: YYYY. MM. DD. 
+        const day = String(d.getDate()).padStart(2, '0');
+        const hour = d.getHours();
+        const minute = String(d.getMinutes()).padStart(2, '0');
+        const ampm = hour >= 12 ? '오후' : '오전';
+        const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+
+        // User example uses 2-digit year "25". Let's stick to full year or 2-digit as per preference. 
+        // User text example: "2025.12.10."
+        return `${year}.${month}.${day}. ${ampm} ${displayHour}:${minute}`;
+    };
+
+    // 2. 결제방식 매핑
+    const getPaymentText = (type: string, isPickup: boolean) => {
+        // 배달: 앱결제, 만나서카드, 만나서현금
+        // 포장: 앱결제, 방문시결제
+        if (type === '만나서카드') return '만나서 카드';
+        if (type === '만나서현금') return '만나서 현금';
+        if (type === '방문시결제') return '방문 시 결제';
+        return '앱 결제'; // Default for '앱결제'
+    };
+
+    // 계산 로직
+    const itemsPrice = order.items.reduce((total, item) => {
+        const optionsPrice = item.options?.reduce((optSum, opt) => optSum + (opt.price * (opt.quantity || 1)), 0) || 0;
+        return total + ((item.price + optionsPrice) * item.quantity);
+    }, 0);
+
+    const discountAmount = order.discountAmount || 0;
+    const deliveryFee = order.totalPrice - itemsPrice + discountAmount;
+
+    return (
+        <div id="receipt-container">
+            <div className="w-[280px] mx-auto bg-white text-black font-mono text-[12px] leading-snug p-2 pb-8">
+
+                {/* 상점 정보 */}
+                <div className="text-center mb-4">
+                    <h1 className="text-xl font-bold mb-1">{store?.name || '상점'}</h1>
+                    <p className="mb-0.5">{store?.address || ''}</p>
+                    <p>Tel: {store?.phone || ''}</p>
+                </div>
+
+                {/* 주문 타입 배지 */}
+                <div className="text-center mb-2">
+                    <span className="inline-block border border-black px-2 py-0.5 font-bold text-sm">
+                        [{order.orderType}]
+                    </span>
+                </div>
+
+                {/* 주문 번호 */}
+                <div className="text-center mb-2">
+                    <p className="font-bold text-sm">주문번호: {order.id.slice(0, 4).toUpperCase()}</p>
+                </div>
+
+                {/* 주문 기본 정보 */}
+                <div className="mb-2 space-y-0.5">
+                    <div className="flex justify-between">
+                        <span>일시</span>
+                        <span>{formatDate(order.createdAt)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span>결제</span>
+                        <span>{getPaymentText(order.paymentType, order.orderType === '포장주문')}</span>
+                    </div>
+                </div>
+
+                {/* 고객 정보 */}
+                <div className="mb-2 mt-4">
+                    <p className="font-bold mb-1">고객 정보</p>
+                    {order.orderType === '배달주문' && (
+                        <p className="mb-1 break-words">{order.address}</p>
+                    )}
+                    <p className="mb-1">{order.phone}</p>
+                    {/* 포장주문시 이름, 전화번호만 노출인데 이름이 없으므로 전화번호만 노출됨 (배달시엔 주소 포함) */}
+                </div>
+
+                {/* 요청 사항 */}
+                {order.memo && (
+                    <div className="mb-2">
+                        <p className="font-bold mb-1">요청사항:</p>
+                        <p className="break-words">{order.memo}</p>
+                    </div>
+                )}
+
+                <div className="border-b border-black my-2"></div>
+
+                {/* 메뉴 헤더 */}
+                <div className="flex mb-1 font-bold">
+                    <span className="flex-1">메뉴명</span>
+                    <span className="w-8 text-center">수량</span>
+                    <span className="w-16 text-right">금액</span>
+                </div>
+
+                <div className="border-b border-black mb-2"></div>
+
+                {/* 메뉴 리스트 */}
+                <div className="mb-2">
+                    {order.items.map((item, index) => {
+                        const optionsPrice = item.options?.reduce((sum, opt) => sum + (opt.price * (opt.quantity || 1)), 0) || 0;
+                        const itemTotal = (item.price + optionsPrice) * item.quantity;
+                        // Format: 
+                        // Item Name    Qty    Price
+                        // - Option            Price
+                        //                     Total (aligned right)
+
+                        return (
+                            <div key={index} className="mb-2">
+                                {/* 메인 메뉴 */}
+                                <div className="flex items-start mb-0.5">
+                                    <span className="flex-1 break-words pr-1">{item.name}</span>
+                                    <span className="w-8 text-center">{item.quantity}</span>
+                                    <span className="w-16 text-right">{item.price.toLocaleString()}</span>
+                                </div>
+
+                                {/* 옵션 리스트 */}
+                                {item.options && item.options.map((opt, optIdx) => (
+                                    <div key={optIdx} className="flex text-gray-800 mb-0.5">
+                                        <span className="flex-1 break-words pl-2 text-[11px]">- {opt.name}</span>
+                                        <span className="w-8 text-center text-[11px]"></span> {/* 옵션 수량 표시는 보통 생략하거나 이름 옆에 */}
+                                        <span className="w-16 text-right text-[11px]">+{(opt.price * (opt.quantity || 1)).toLocaleString()}</span>
+                                    </div>
+                                ))}
+
+                                {/* 항목 소계 (옵션 포함 총액) */}
+                                <div className="text-right font-bold mt-1">
+                                    {itemTotal.toLocaleString()}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className="border-b border-black my-2"></div>
+
+                {/* 금액 집계 */}
+                <div className="space-y-1 mb-2">
+                    <div className="flex justify-between">
+                        <span>주문금액</span>
+                        <span>{itemsPrice.toLocaleString()}</span>
+                    </div>
+                    {deliveryFee > 0 && (
+                        <div className="flex justify-between">
+                            <span>배달팁</span>
+                            <span>+{deliveryFee.toLocaleString()}</span>
+                        </div>
+                    )}
+                    {discountAmount > 0 && (
+                        <div className="flex justify-between">
+                            <span>할인금액</span>
+                            <span>-{discountAmount.toLocaleString()}</span>
+                        </div>
+                    )}
+                </div>
+
+                <div className="border-b border-black my-2"></div>
+
+                {/* 최종 합계 */}
+                <div className="flex justify-between text-lg font-bold mb-4">
+                    <span>합계</span>
+                    <span>{order.totalPrice.toLocaleString()}원</span>
+                </div>
+
+                <div className="border-b border-black my-4"></div>
+
+                {/* 푸터 */}
+                <div className="text-center">
+                    <p className="mb-1 font-bold">* 이용해 주셔서 감사합니다 *</p>
+                    <p className="text-[10px]">Powered by CusCom</p>
+                </div>
+
+            </div>
+        </div>
+    );
+}
+
+```
+
+---
+
+## File: src\components\common\Badge.tsx
+
+```typescript
+import { HTMLAttributes, ReactNode } from 'react';
+
+export type BadgeVariant = 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'gray';
+
+interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
+  variant?: BadgeVariant;
+  size?: 'sm' | 'md' | 'lg';
+  children?: ReactNode;
+}
+
+export default function Badge({
+  variant = 'primary',
+  size = 'md',
+  className = '',
+  children,
+  ...props
+}: BadgeProps) {
+  const variantClasses = {
+    primary: 'bg-blue-100 text-blue-700',
+    secondary: 'bg-orange-100 text-orange-700',
+    success: 'bg-green-100 text-green-700',
+    warning: 'bg-yellow-100 text-yellow-700',
+    danger: 'bg-red-100 text-red-700',
+    gray: 'bg-gray-100 text-gray-700',
+  };
+
+  const sizeClasses = {
+    sm: 'px-2 py-0.5 text-xs',
+    md: 'px-2.5 py-1 text-sm',
+    lg: 'px-3 py-1.5 text-base',
+  };
+
+  return (
+    <span
+      className={`
+        inline-flex items-center font-medium rounded-full
+        ${variantClasses[variant]}
+        ${sizeClasses[size]}
+        ${className}
+      `}
+      {...props}
+    >
+      {children}
+    </span>
+  );
+}
+
+```
+
+---
+
+## File: src\components\event\EventBanner.tsx
+
+```typescript
+import { useState, useEffect } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Event } from '../../types/event';
-import { formatDate } from '../../utils/formatDate';
-import Card from '../common/Card';
-import Badge from '../common/Badge';
 import { useStore } from '../../contexts/StoreContext';
 import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
 import { getActiveEventsQuery } from '../../services/eventService';
 
-export default function EventList() {
-    const { store } = useStore();
-    const storeId = store?.id;
-    const { data: events, loading } = useFirestoreCollection<Event>(
-        storeId ? getActiveEventsQuery(storeId) : null
-    );
+export default function EventBanner() {
+  const { store } = useStore();
+  const storeId = store?.id;
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-    if (!storeId) return null;
+  // Firestore에서 활성화된 이벤트만 조회
+  const { data: events, loading } = useFirestoreCollection<Event>(
+    storeId ? getActiveEventsQuery(storeId) : null
+  );
 
-    if (loading) {
-        return (
-            <div className="text-center py-8">
-                <p className="text-gray-600">이벤트를 불러오는 중...</p>
-            </div>
-        );
+  // 자동 슬라이드
+  useEffect(() => {
+    if (!events || events.length <= 1) return;
+
+    const timer = setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % events.length);
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [events?.length]);
+
+  if (!storeId || loading) {
+    return null;
+  }
+
+  if (!events || events.length === 0) {
+    return null;
+  }
+
+  const goToPrevious = () => {
+    setCurrentIndex((prev) => (prev - 1 + events.length) % events.length);
+  };
+
+  const goToNext = () => {
+    setCurrentIndex((prev) => (prev + 1) % events.length);
+  };
+
+  const handleClick = (event: Event) => {
+    if (event.link) {
+      window.open(event.link, '_blank');
     }
+  };
 
-    if (!events || events.length === 0) {
-        return (
-            <div className="text-center py-16">
-                <div className="text-5xl mb-4">🎉</div>
-                <p className="text-gray-600">현재 진행 중인 이벤트가 없습니다</p>
-            </div>
-        );
-    }
+  const currentEvent = events[currentIndex];
 
-    return (
-        <div className="space-y-4">
-            {events.map((event) => (
-                <Card key={event.id} className="overflow-hidden p-0">
-                    {event.imageUrl && (
-                        <div className="relative h-48 w-full">
-                            <img
-                                src={event.imageUrl}
-                                alt={event.title}
-                                className="w-full h-full object-cover"
-                            />
-                            {event.active && (
-                                <div className="absolute top-2 right-2">
-                                    <Badge variant="success" size="sm">진행중</Badge>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    <div className="p-4">
-                        <h3 className="text-lg font-bold text-gray-900 mb-2">{event.title}</h3>
-
-                        <div className="flex items-center text-sm text-gray-500 mb-4">
-                            <Calendar className="w-4 h-4 mr-1.5" />
-                            <span>
-                                {formatDate(event.startDate)} ~ {formatDate(event.endDate)}
-                            </span>
-                        </div>
-
-                        {event.link && (
-                            <a
-                                href={event.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center text-blue-600 hover:text-blue-700 font-medium text-sm"
-                            >
-                                자세히 보기 <ChevronRight className="w-4 h-4 ml-0.5" />
-                            </a>
-                        )}
-                    </div>
-                </Card>
-            ))}
-        </div>
-    );
-}
-
-```
-
----
-
-## File: src\components\menu\CategoryBar.tsx
-
-```typescript
-import { CATEGORIES, Category } from '../../types/menu';
-
-interface CategoryBarProps {
-  selected: string;
-  onSelect: (category: string) => void;
-}
-
-export default function CategoryBar({ selected, onSelect }: CategoryBarProps) {
-  const allCategories = ['전체', ...CATEGORIES];
-  
   return (
-    <div className="sticky top-16 z-40 bg-white border-b border-gray-200 shadow-sm">
-      <div className="container mx-auto px-4 py-3">
-        {/* 스크롤 힌트를 위한 그라데이션 오버레이 */}
-        <div className="relative">
-          {/* 오른쪽 그라데이션 (더 많은 항목이 있음을 표시) */}
-          <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10 md:hidden"></div>
-          
-          {/* 카테고리 버튼들 */}
-          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
-            {allCategories.map((category) => (
-              <button
-                key={category}
-                onClick={() => onSelect(category)}
-                className={`
-                  px-4 py-2 rounded-lg whitespace-nowrap transition-all duration-200 flex-shrink-0
-                  ${
-                    selected === category
-                      ? 'gradient-primary text-white shadow-md scale-105'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }
-                `}
-              >
-                {category}
-              </button>
-            ))}
+    <div className="relative w-full">
+      {/* 배너 이미지 */}
+      <div
+        onClick={() => handleClick(currentEvent)}
+        className="relative aspect-[16/9] sm:aspect-[21/9] rounded-2xl overflow-hidden cursor-pointer group"
+      >
+        <img
+          src={currentEvent.imageUrl}
+          alt={currentEvent.title}
+          className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-300"
+        />
+
+        {/* 오버레이 */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent">
+          <div className="absolute bottom-0 left-0 right-0 p-6">
+            <h3 className="text-white font-bold text-xl sm:text-2xl drop-shadow-lg">
+              {currentEvent.title}
+            </h3>
           </div>
         </div>
       </div>
+
+      {/* 이전/다음 버튼 (여러 이벤트가 있을 때만) */}
+      {events.length > 1 && (
+        <>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              goToPrevious();
+            }}
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/90 hover:bg-white rounded-full flex items-center justify-center shadow-lg transition-all opacity-0 group-hover:opacity-100"
+          >
+            <ChevronLeft className="w-6 h-6 text-gray-800" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              goToNext();
+            }}
+            className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/90 hover:bg-white rounded-full flex items-center justify-center shadow-lg transition-all opacity-0 group-hover:opacity-100"
+          >
+            <ChevronRight className="w-6 h-6 text-gray-800" />
+          </button>
+
+          {/* 인디케이터 */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+            {events.map((_, idx) => (
+              <button
+                key={idx}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCurrentIndex(idx);
+                }}
+                className={`w-2 h-2 rounded-full transition-all ${idx === currentIndex
+                  ? 'bg-white w-8'
+                  : 'bg-white/50 hover:bg-white/75'
+                  }`}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -145,1642 +463,917 @@ export default function CategoryBar({ selected, onSelect }: CategoryBarProps) {
 
 ---
 
-## File: src\components\review\ReviewModal.tsx
+## File: src\components\notice\NoticeList.tsx
 
 ```typescript
-import { useState, useEffect, useRef } from 'react';
-import { X, Star, Trash2, Camera } from 'lucide-react';
-import Button from '../common/Button';
+import { useState } from 'react';
+import { Clock, Pin, ChevronDown, ChevronUp } from 'lucide-react';
+import { Notice } from '../../types/notice';
+import { formatDateRelative } from '../../utils/formatDate';
 import Card from '../common/Card';
-import { toast } from 'sonner';
-import { useAuth } from '../../contexts/AuthContext';
+import Badge from '../common/Badge';
 import { useStore } from '../../contexts/StoreContext';
-import { createReview, updateReview, deleteReview, getReviewByOrder } from '../../services/reviewService';
-import { uploadReviewImage, validateImageFile } from '../../services/storageService';
-import { Review } from '../../types/review';
+import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { getAllNoticesQuery } from '../../services/noticeService';
 
-interface ReviewModalProps {
-  orderId: string;
-  onClose: () => void;
-  onSuccess?: () => void;
-}
-
-export default function ReviewModal({ orderId, onClose, onSuccess }: ReviewModalProps) {
-  const { user } = useAuth();
+export default function NoticeList() {
   const { store } = useStore();
   const storeId = store?.id;
-  const [rating, setRating] = useState(0);
-  const [hoverRating, setHoverRating] = useState(0);
-  const [comment, setComment] = useState('');
-  const [existingReview, setExistingReview] = useState<Review | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // 기존 리뷰 확인
-  useEffect(() => {
-    if (!storeId || !user) return;
-
-    const loadExistingReview = async () => {
-      try {
-        const review = await getReviewByOrder(storeId, orderId, user.id);
-        if (review) {
-          setExistingReview(review);
-          setRating(review.rating);
-          setComment(review.comment);
-          if (review.images && review.images.length > 0) {
-            setImagePreview(review.images[0]);
-          }
-        }
-      } catch (error) {
-        console.error('기존 리뷰 조회 실패:', error);
-      }
-    };
-
-    loadExistingReview();
-  }, [storeId, orderId, user]);
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const validation = validateImageFile(file);
-      if (!validation.valid) {
-        toast.error(validation.error);
-        return;
-      }
-      setImageFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!storeId || !user) {
-      toast.error('로그인이 필요합니다');
-      return;
-    }
-
-    if (rating === 0) {
-      toast.error('별점을 선택해주세요');
-      return;
-    }
-
-    if (!comment.trim()) {
-      toast.error('리뷰 내용을 입력해주세요');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      // 이미지 업로드
-      let imageUrls = existingReview?.images || [];
-
-      // 새 이미지가 있으면 업로드
-      if (imageFile) {
-        const url = await uploadReviewImage(imageFile);
-        imageUrls = [url]; // 현재는 1장만 지원 (덮어쓰기)
-      }
-
-      // 이미지를 삭제했다면 (preview가 null이고 file도 null이면)
-      if (!imagePreview && !imageFile) {
-        imageUrls = [];
-      }
-
-      const reviewData = {
-        rating,
-        comment: comment.trim(),
-        images: imageUrls,
-      };
-
-      if (existingReview) {
-        // 수정
-        await updateReview(storeId, existingReview.id, reviewData);
-        toast.success('리뷰가 수정되었습니다');
-      } else {
-        // 생성
-        await createReview(storeId, {
-          orderId,
-          userId: user.id,
-          userDisplayName: user.displayName || user.email || '사용자',
-          ...reviewData,
-        });
-        toast.success('리뷰가 등록되었습니다');
-      }
-
-      onSuccess?.();
-      onClose();
-    } catch (error) {
-      console.error('Review submit error:', error);
-      toast.error('리뷰 처리 중 오류가 발생했습니다');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!storeId || !existingReview) return;
-
-    if (!window.confirm('리뷰를 삭제하시겠습니까?')) {
-      return;
-    }
-
-    setIsDeleting(true);
-
-    try {
-      await deleteReview(storeId, existingReview.id, orderId);
-      toast.success('리뷰가 삭제되었습니다');
-      onSuccess?.();
-      onClose();
-    } catch (error) {
-      toast.error('리뷰 삭제 중 오류가 발생했습니다');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 animate-fade-in">
-      <div
-        className="relative w-full max-w-lg bg-white rounded-t-3xl sm:rounded-3xl overflow-hidden animate-slide-up"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
-        >
-          <X className="w-5 h-5 text-gray-600" />
-        </button>
-
-        <div className="p-6">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">
-            리뷰 작성
-          </h2>
-
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Rating */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                별점을 선택해주세요
-              </label>
-              <div className="flex gap-2 justify-center">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <button
-                    key={star}
-                    type="button"
-                    onClick={() => setRating(star)}
-                    onMouseEnter={() => setHoverRating(star)}
-                    onMouseLeave={() => setHoverRating(0)}
-                    className="transition-transform hover:scale-110"
-                  >
-                    <Star
-                      className={`w-12 h-12 ${star <= (hoverRating || rating)
-                        ? 'fill-yellow-400 text-yellow-400'
-                        : 'text-gray-300'
-                        }`}
-                    />
-                  </button>
-                ))}
-              </div>
-              {rating > 0 && (
-                <p className="text-center mt-2 text-gray-600">
-                  {rating}점
-                </p>
-              )}
-            </div>
-
-            {/* Comment */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                리뷰 내용
-              </label>
-              <textarea
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                placeholder="음식은 어떠셨나요? 솔직한 리뷰를 남겨주세요."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
-                rows={5}
-                maxLength={500}
-              />
-              <p className="text-sm text-gray-500 mt-1 text-right">
-                {comment.length}/500
-              </p>
-            </div>
-
-            {/* Image Upload */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                사진 첨부
-              </label>
-              <div className="flex gap-3 overflow-x-auto py-2">
-                {/* Upload Button */}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-20 h-20 flex flex-col items-center justify-center border border-dashed border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-gray-500 hover:text-blue-500"
-                >
-                  <Camera className="w-6 h-6 mb-1" />
-                  <span className="text-xs">사진 추가</span>
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleImageChange}
-                />
-
-                {/* Preview */}
-                {imagePreview && (
-                  <div className="relative w-20 h-20 rounded-lg overflow-hidden border border-gray-200">
-                    <img
-                      src={imagePreview}
-                      alt="Preview"
-                      className="w-full h-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setImageFile(null);
-                        setImagePreview(null);
-                        if (fileInputRef.current) fileInputRef.current.value = '';
-                      }}
-                      className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-0.5 hover:bg-red-500 transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Buttons */}
-            <div className="flex gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                fullWidth
-                onClick={onClose}
-              >
-                취소
-              </Button>
-              <Button
-                type="submit"
-                fullWidth
-                isLoading={isLoading}
-              >
-                리뷰 등록
-              </Button>
-            </div>
-
-            {/* Delete Button */}
-            {existingReview && (
-              <div className="mt-4">
-                <Button
-                  type="button"
-                  variant="danger"
-                  fullWidth
-                  onClick={handleDelete}
-                  isLoading={isDeleting}
-                >
-                  리뷰 삭제
-                </Button>
-              </div>
-            )}
-          </form>
-        </div>
-      </div>
-    </div>
+  const { data: notices, loading } = useFirestoreCollection<Notice>(
+    storeId ? getAllNoticesQuery(storeId) : null
   );
-}
-```
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
----
-
-## File: src\components\ui\carousel.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import useEmblaCarousel, {
-  type UseEmblaCarouselType,
-} from "embla-carousel-react@8.6.0";
-import { ArrowLeft, ArrowRight } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-import { Button } from "./button";
-
-type CarouselApi = UseEmblaCarouselType[1];
-type UseCarouselParameters = Parameters<typeof useEmblaCarousel>;
-type CarouselOptions = UseCarouselParameters[0];
-type CarouselPlugin = UseCarouselParameters[1];
-
-type CarouselProps = {
-  opts?: CarouselOptions;
-  plugins?: CarouselPlugin;
-  orientation?: "horizontal" | "vertical";
-  setApi?: (api: CarouselApi) => void;
-};
-
-type CarouselContextProps = {
-  carouselRef: ReturnType<typeof useEmblaCarousel>[0];
-  api: ReturnType<typeof useEmblaCarousel>[1];
-  scrollPrev: () => void;
-  scrollNext: () => void;
-  canScrollPrev: boolean;
-  canScrollNext: boolean;
-} & CarouselProps;
-
-const CarouselContext = React.createContext<CarouselContextProps | null>(null);
-
-function useCarousel() {
-  const context = React.useContext(CarouselContext);
-
-  if (!context) {
-    throw new Error("useCarousel must be used within a <Carousel />");
+  if (!storeId) {
+    return null;
   }
 
-  return context;
-}
-
-function Carousel({
-  orientation = "horizontal",
-  opts,
-  setApi,
-  plugins,
-  className,
-  children,
-  ...props
-}: React.ComponentProps<"div"> & CarouselProps) {
-  const [carouselRef, api] = useEmblaCarousel(
-    {
-      ...opts,
-      axis: orientation === "horizontal" ? "x" : "y",
-    },
-    plugins,
-  );
-  const [canScrollPrev, setCanScrollPrev] = React.useState(false);
-  const [canScrollNext, setCanScrollNext] = React.useState(false);
-
-  const onSelect = React.useCallback((api: CarouselApi) => {
-    if (!api) return;
-    setCanScrollPrev(api.canScrollPrev());
-    setCanScrollNext(api.canScrollNext());
-  }, []);
-
-  const scrollPrev = React.useCallback(() => {
-    api?.scrollPrev();
-  }, [api]);
-
-  const scrollNext = React.useCallback(() => {
-    api?.scrollNext();
-  }, [api]);
-
-  const handleKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        scrollPrev();
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        scrollNext();
-      }
-    },
-    [scrollPrev, scrollNext],
-  );
-
-  React.useEffect(() => {
-    if (!api || !setApi) return;
-    setApi(api);
-  }, [api, setApi]);
-
-  React.useEffect(() => {
-    if (!api) return;
-    onSelect(api);
-    api.on("reInit", onSelect);
-    api.on("select", onSelect);
-
-    return () => {
-      api?.off("select", onSelect);
-    };
-  }, [api, onSelect]);
-
-  return (
-    <CarouselContext.Provider
-      value={{
-        carouselRef,
-        api: api,
-        opts,
-        orientation:
-          orientation || (opts?.axis === "y" ? "vertical" : "horizontal"),
-        scrollPrev,
-        scrollNext,
-        canScrollPrev,
-        canScrollNext,
-      }}
-    >
-      <div
-        onKeyDownCapture={handleKeyDown}
-        className={cn("relative", className)}
-        role="region"
-        aria-roledescription="carousel"
-        data-slot="carousel"
-        {...props}
-      >
-        {children}
+  if (loading) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-gray-600">공지사항을 불러오는 중...</p>
       </div>
-    </CarouselContext.Provider>
-  );
-}
+    );
+  }
 
-function CarouselContent({ className, ...props }: React.ComponentProps<"div">) {
-  const { carouselRef, orientation } = useCarousel();
+  // 고정 공지와 일반 공지 분류
+  const pinnedNotices = (notices || []).filter(n => n.pinned);
+  const regularNotices = (notices || []).filter(n => !n.pinned);
 
-  return (
-    <div
-      ref={carouselRef}
-      className="overflow-hidden"
-      data-slot="carousel-content"
-    >
-      <div
-        className={cn(
-          "flex",
-          orientation === "horizontal" ? "-ml-4" : "-mt-4 flex-col",
-          className,
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case '공지': return 'primary';
+      case '이벤트': return 'secondary';
+      case '점검': return 'danger';
+      case '할인': return 'success';
+      default: return 'gray';
+    }
+  };
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(expandedId === id ? null : id);
+  };
+
+  const renderNotice = (notice: Notice) => {
+    const isExpanded = expandedId === notice.id;
+    const isPinned = notice.pinned;
+
+    return (
+      <Card
+        key={notice.id}
+        className={`${isPinned ? 'bg-blue-50 border-2 border-blue-200' : ''}`}
+      >
+        <div
+          className="cursor-pointer"
+          onClick={() => toggleExpand(notice.id)}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between mb-2">
+            <div className="flex items-center gap-2 flex-1">
+              {isPinned && (
+                <Pin className="w-4 h-4 text-blue-600 flex-shrink-0" />
+              )}
+              <Badge
+                variant={getCategoryColor(notice.category)}
+                size="sm"
+              >
+                {notice.category}
+              </Badge>
+              <h3 className="font-semibold text-gray-900 line-clamp-1 flex-1">
+                {notice.title}
+              </h3>
+            </div>
+            {isExpanded ? (
+              <ChevronUp className="w-5 h-5 text-gray-400 flex-shrink-0" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-400 flex-shrink-0" />
+            )}
+          </div>
+
+          {/* Preview */}
+          {!isExpanded && (
+            <p className="text-sm text-gray-600 line-clamp-2 mb-2">
+              {notice.content}
+            </p>
+          )}
+
+          {/* Date */}
+          <div className="flex items-center text-xs text-gray-500">
+            <Clock className="w-3 h-3 mr-1" />
+            {formatDateRelative(notice.createdAt)}
+          </div>
+        </div>
+
+        {/* Expanded Content */}
+        {isExpanded && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <p className="text-gray-700 whitespace-pre-wrap">
+              {notice.content}
+            </p>
+          </div>
         )}
-        {...props}
-      />
-    </div>
-  );
-}
+      </Card>
+    );
+  };
 
-function CarouselItem({ className, ...props }: React.ComponentProps<"div">) {
-  const { orientation } = useCarousel();
-
-  return (
-    <div
-      role="group"
-      aria-roledescription="slide"
-      data-slot="carousel-item"
-      className={cn(
-        "min-w-0 shrink-0 grow-0 basis-full",
-        orientation === "horizontal" ? "pl-4" : "pt-4",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CarouselPrevious({
-  className,
-  variant = "outline",
-  size = "icon",
-  ...props
-}: React.ComponentProps<typeof Button>) {
-  const { orientation, scrollPrev, canScrollPrev } = useCarousel();
+  if (notices.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <div className="text-5xl mb-4">📢</div>
+        <p className="text-gray-600">등록된 공지사항이 없습니다</p>
+      </div>
+    );
+  }
 
   return (
-    <Button
-      data-slot="carousel-previous"
-      variant={variant}
-      size={size}
-      className={cn(
-        "absolute size-8 rounded-full",
-        orientation === "horizontal"
-          ? "top-1/2 -left-12 -translate-y-1/2"
-          : "-top-12 left-1/2 -translate-x-1/2 rotate-90",
-        className,
-      )}
-      disabled={!canScrollPrev}
-      onClick={scrollPrev}
-      {...props}
-    >
-      <ArrowLeft />
-      <span className="sr-only">Previous slide</span>
-    </Button>
-  );
-}
-
-function CarouselNext({
-  className,
-  variant = "outline",
-  size = "icon",
-  ...props
-}: React.ComponentProps<typeof Button>) {
-  const { orientation, scrollNext, canScrollNext } = useCarousel();
-
-  return (
-    <Button
-      data-slot="carousel-next"
-      variant={variant}
-      size={size}
-      className={cn(
-        "absolute size-8 rounded-full",
-        orientation === "horizontal"
-          ? "top-1/2 -right-12 -translate-y-1/2"
-          : "-bottom-12 left-1/2 -translate-x-1/2 rotate-90",
-        className,
-      )}
-      disabled={!canScrollNext}
-      onClick={scrollNext}
-      {...props}
-    >
-      <ArrowRight />
-      <span className="sr-only">Next slide</span>
-    </Button>
-  );
-}
-
-export {
-  type CarouselApi,
-  Carousel,
-  CarouselContent,
-  CarouselItem,
-  CarouselPrevious,
-  CarouselNext,
-};
-
-```
-
----
-
-## File: src\components\ui\collapsible.tsx
-
-```typescript
-"use client";
-
-import * as CollapsiblePrimitive from "@radix-ui/react-collapsible@1.1.3";
-
-function Collapsible({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />;
-}
-
-function CollapsibleTrigger({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
-  return (
-    <CollapsiblePrimitive.CollapsibleTrigger
-      data-slot="collapsible-trigger"
-      {...props}
-    />
-  );
-}
-
-function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
-  return (
-    <CollapsiblePrimitive.CollapsibleContent
-      data-slot="collapsible-content"
-      {...props}
-    />
-  );
-}
-
-export { Collapsible, CollapsibleTrigger, CollapsibleContent };
-
-```
-
----
-
-## File: src\components\ui\label.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as LabelPrimitive from "@radix-ui/react-label@2.1.2";
-
-import { cn } from "./utils";
-
-function Label({
-  className,
-  ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
-  return (
-    <LabelPrimitive.Root
-      data-slot="label"
-      className={cn(
-        "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export { Label };
-
-```
-
----
-
-## File: src\components\ui\menubar.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as MenubarPrimitive from "@radix-ui/react-menubar@1.1.6";
-import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-
-function Menubar({
-  className,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Root>) {
-  return (
-    <MenubarPrimitive.Root
-      data-slot="menubar"
-      className={cn(
-        "bg-background flex h-9 items-center gap-1 rounded-md border p-1 shadow-xs",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MenubarMenu({
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Menu>) {
-  return <MenubarPrimitive.Menu data-slot="menubar-menu" {...props} />;
-}
-
-function MenubarGroup({
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Group>) {
-  return <MenubarPrimitive.Group data-slot="menubar-group" {...props} />;
-}
-
-function MenubarPortal({
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Portal>) {
-  return <MenubarPrimitive.Portal data-slot="menubar-portal" {...props} />;
-}
-
-function MenubarRadioGroup({
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.RadioGroup>) {
-  return (
-    <MenubarPrimitive.RadioGroup data-slot="menubar-radio-group" {...props} />
-  );
-}
-
-function MenubarTrigger({
-  className,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Trigger>) {
-  return (
-    <MenubarPrimitive.Trigger
-      data-slot="menubar-trigger"
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex items-center rounded-sm px-2 py-1 text-sm font-medium outline-hidden select-none",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MenubarContent({
-  className,
-  align = "start",
-  alignOffset = -4,
-  sideOffset = 8,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Content>) {
-  return (
-    <MenubarPortal>
-      <MenubarPrimitive.Content
-        data-slot="menubar-content"
-        align={align}
-        alignOffset={alignOffset}
-        sideOffset={sideOffset}
-        className={cn(
-          "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[12rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-md border p-1 shadow-md",
-          className,
-        )}
-        {...props}
-      />
-    </MenubarPortal>
-  );
-}
-
-function MenubarItem({
-  className,
-  inset,
-  variant = "default",
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Item> & {
-  inset?: boolean;
-  variant?: "default" | "destructive";
-}) {
-  return (
-    <MenubarPrimitive.Item
-      data-slot="menubar-item"
-      data-inset={inset}
-      data-variant={variant}
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MenubarCheckboxItem({
-  className,
-  children,
-  checked,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.CheckboxItem>) {
-  return (
-    <MenubarPrimitive.CheckboxItem
-      data-slot="menubar-checkbox-item"
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground relative flex cursor-default items-center gap-2 rounded-xs py-1.5 pr-2 pl-8 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      checked={checked}
-      {...props}
-    >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
-        <MenubarPrimitive.ItemIndicator>
-          <CheckIcon className="size-4" />
-        </MenubarPrimitive.ItemIndicator>
-      </span>
-      {children}
-    </MenubarPrimitive.CheckboxItem>
-  );
-}
-
-function MenubarRadioItem({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.RadioItem>) {
-  return (
-    <MenubarPrimitive.RadioItem
-      data-slot="menubar-radio-item"
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground relative flex cursor-default items-center gap-2 rounded-xs py-1.5 pr-2 pl-8 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
-        <MenubarPrimitive.ItemIndicator>
-          <CircleIcon className="size-2 fill-current" />
-        </MenubarPrimitive.ItemIndicator>
-      </span>
-      {children}
-    </MenubarPrimitive.RadioItem>
-  );
-}
-
-function MenubarLabel({
-  className,
-  inset,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Label> & {
-  inset?: boolean;
-}) {
-  return (
-    <MenubarPrimitive.Label
-      data-slot="menubar-label"
-      data-inset={inset}
-      className={cn(
-        "px-2 py-1.5 text-sm font-medium data-[inset]:pl-8",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MenubarSeparator({
-  className,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Separator>) {
-  return (
-    <MenubarPrimitive.Separator
-      data-slot="menubar-separator"
-      className={cn("bg-border -mx-1 my-1 h-px", className)}
-      {...props}
-    />
-  );
-}
-
-function MenubarShortcut({
-  className,
-  ...props
-}: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="menubar-shortcut"
-      className={cn(
-        "text-muted-foreground ml-auto text-xs tracking-widest",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MenubarSub({
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.Sub>) {
-  return <MenubarPrimitive.Sub data-slot="menubar-sub" {...props} />;
-}
-
-function MenubarSubTrigger({
-  className,
-  inset,
-  children,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.SubTrigger> & {
-  inset?: boolean;
-}) {
-  return (
-    <MenubarPrimitive.SubTrigger
-      data-slot="menubar-sub-trigger"
-      data-inset={inset}
-      className={cn(
-        "focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none select-none data-[inset]:pl-8",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      <ChevronRightIcon className="ml-auto h-4 w-4" />
-    </MenubarPrimitive.SubTrigger>
-  );
-}
-
-function MenubarSubContent({
-  className,
-  ...props
-}: React.ComponentProps<typeof MenubarPrimitive.SubContent>) {
-  return (
-    <MenubarPrimitive.SubContent
-      data-slot="menubar-sub-content"
-      className={cn(
-        "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-md border p-1 shadow-lg",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export {
-  Menubar,
-  MenubarPortal,
-  MenubarMenu,
-  MenubarTrigger,
-  MenubarContent,
-  MenubarGroup,
-  MenubarSeparator,
-  MenubarLabel,
-  MenubarItem,
-  MenubarShortcut,
-  MenubarCheckboxItem,
-  MenubarRadioGroup,
-  MenubarRadioItem,
-  MenubarSub,
-  MenubarSubTrigger,
-  MenubarSubContent,
-};
-
-```
-
----
-
-## File: src\components\ui\resizable.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import { GripVerticalIcon } from "lucide-react@0.487.0";
-import * as ResizablePrimitive from "react-resizable-panels@2.1.7";
-
-import { cn } from "./utils";
-
-function ResizablePanelGroup({
-  className,
-  ...props
-}: React.ComponentProps<typeof ResizablePrimitive.PanelGroup>) {
-  return (
-    <ResizablePrimitive.PanelGroup
-      data-slot="resizable-panel-group"
-      className={cn(
-        "flex h-full w-full data-[panel-group-direction=vertical]:flex-col",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function ResizablePanel({
-  ...props
-}: React.ComponentProps<typeof ResizablePrimitive.Panel>) {
-  return <ResizablePrimitive.Panel data-slot="resizable-panel" {...props} />;
-}
-
-function ResizableHandle({
-  withHandle,
-  className,
-  ...props
-}: React.ComponentProps<typeof ResizablePrimitive.PanelResizeHandle> & {
-  withHandle?: boolean;
-}) {
-  return (
-    <ResizablePrimitive.PanelResizeHandle
-      data-slot="resizable-handle"
-      className={cn(
-        "bg-border focus-visible:ring-ring relative flex w-px items-center justify-center after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-1 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:-translate-y-1/2 data-[panel-group-direction=vertical]:after:translate-x-0 [&[data-panel-group-direction=vertical]>div]:rotate-90",
-        className,
-      )}
-      {...props}
-    >
-      {withHandle && (
-        <div className="bg-border z-10 flex h-4 w-3 items-center justify-center rounded-xs border">
-          <GripVerticalIcon className="size-2.5" />
+    <div className="space-y-4">
+      {/* 고정 공지 */}
+      {pinnedNotices.length > 0 && (
+        <div className="space-y-3">
+          {pinnedNotices.map(renderNotice)}
         </div>
       )}
-    </ResizablePrimitive.PanelResizeHandle>
-  );
-}
 
-export { ResizablePanelGroup, ResizablePanel, ResizableHandle };
-
-```
-
----
-
-## File: src\components\ui\sheet.tsx
-
-```typescript
-"use client";
-
-import * as React from "react";
-import * as SheetPrimitive from "@radix-ui/react-dialog@1.1.6";
-import { XIcon } from "lucide-react@0.487.0";
-
-import { cn } from "./utils";
-
-function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
-}
-
-function SheetTrigger({
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Trigger>) {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />;
-}
-
-function SheetClose({
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Close>) {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
-}
-
-function SheetPortal({
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Portal>) {
-  return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />;
-}
-
-function SheetOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
-  return (
-    <SheetPrimitive.Overlay
-      data-slot="sheet-overlay"
-      className={cn(
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
-        className,
+      {/* 일반 공지 */}
+      {regularNotices.length > 0 && (
+        <div className="space-y-3">
+          {regularNotices.map(renderNotice)}
+        </div>
       )}
-      {...props}
-    />
+    </div>
   );
 }
-
-function SheetContent({
-  className,
-  children,
-  side = "right",
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
-  side?: "top" | "right" | "bottom" | "left";
-}) {
-  return (
-    <SheetPortal>
-      <SheetOverlay />
-      <SheetPrimitive.Content
-        data-slot="sheet-content"
-        className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
-          side === "right" &&
-            "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm",
-          side === "left" &&
-            "data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-3/4 border-r sm:max-w-sm",
-          side === "top" &&
-            "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b",
-          side === "bottom" &&
-            "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t",
-          className,
-        )}
-        {...props}
-      >
-        {children}
-        <SheetPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
-          <XIcon className="size-4" />
-          <span className="sr-only">Close</span>
-        </SheetPrimitive.Close>
-      </SheetPrimitive.Content>
-    </SheetPortal>
-  );
-}
-
-function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="sheet-header"
-      className={cn("flex flex-col gap-1.5 p-4", className)}
-      {...props}
-    />
-  );
-}
-
-function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="sheet-footer"
-      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
-      {...props}
-    />
-  );
-}
-
-function SheetTitle({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Title>) {
-  return (
-    <SheetPrimitive.Title
-      data-slot="sheet-title"
-      className={cn("text-foreground font-semibold", className)}
-      {...props}
-    />
-  );
-}
-
-function SheetDescription({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Description>) {
-  return (
-    <SheetPrimitive.Description
-      data-slot="sheet-description"
-      className={cn("text-muted-foreground text-sm", className)}
-      {...props}
-    />
-  );
-}
-
-export {
-  Sheet,
-  SheetTrigger,
-  SheetClose,
-  SheetContent,
-  SheetHeader,
-  SheetFooter,
-  SheetTitle,
-  SheetDescription,
-};
-
 ```
 
 ---
 
-## File: src\components\ui\table.tsx
+## File: src\components\review\ReviewList.tsx
 
 ```typescript
-"use client";
+import { Star, User } from 'lucide-react';
+import { useStore } from '../../contexts/StoreContext';
+import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
+import { getAllReviewsQuery } from '../../services/reviewService';
+import { Review } from '../../types/review';
+import Card from '../common/Card';
+import { formatDate } from '../../utils/formatDate';
 
-import * as React from "react";
+export default function ReviewList() {
+  const { store } = useStore();
+  const storeId = store?.id;
 
-import { cn } from "./utils";
+  // Firestore에서 리뷰 조회 (최신순)
+  const { data: reviews, loading } = useFirestoreCollection<Review>(
+    storeId ? getAllReviewsQuery(storeId) : null
+  );
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+  if (!storeId) {
+    return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="py-8 text-center">
+        <p className="text-gray-600">리뷰를 불러오는 중...</p>
+      </div>
+    );
+  }
+
+  if (!reviews || reviews.length === 0) {
+    return (
+      <div className="py-16 text-center">
+        <div className="w-20 h-20 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+          <Star className="w-10 h-10 text-gray-400" />
+        </div>
+        <p className="text-gray-600">아직 작성된 리뷰가 없습니다</p>
+        <p className="text-sm text-gray-500 mt-2">첫 번째 리뷰를 작성해보세요!</p>
+      </div>
+    );
+  }
+
+  // 평균 별점 계산
+  const averageRating = reviews.length > 0
+    ? (reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1)
+    : '0.0';
+
+  // 별점별 개수
+  const ratingCounts = [5, 4, 3, 2, 1].map(rating => ({
+    rating,
+    count: reviews.filter(r => r.rating === rating).length,
+  }));
+
   return (
-    <div
-      data-slot="table-container"
-      className="relative w-full overflow-x-auto"
-    >
-      <table
-        data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
-        {...props}
-      />
+    <div className="space-y-6">
+      {/* 리뷰 통계 */}
+      <Card>
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* 평균 별점 */}
+          <div className="text-center md:border-r border-gray-200">
+            <p className="text-sm text-gray-600 mb-2">평균 별점</p>
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <Star className="w-8 h-8 fill-yellow-400 text-yellow-400" />
+              <span className="text-4xl font-bold text-gray-900">{averageRating}</span>
+              <span className="text-xl text-gray-500">/ 5.0</span>
+            </div>
+            <p className="text-sm text-gray-600">총 {reviews.length}개의 리뷰</p>
+          </div>
+
+          {/* 별점 분포 */}
+          <div className="space-y-2">
+            {ratingCounts.map(({ rating, count }) => (
+              <div key={rating} className="flex items-center gap-3">
+                <div className="flex items-center gap-1 w-16">
+                  <span className="text-sm font-medium text-gray-700">{rating}</span>
+                  <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                </div>
+                <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-yellow-400 h-full rounded-full transition-all"
+                    style={{
+                      width: `${reviews.length > 0 ? (count / reviews.length) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-sm text-gray-600 w-12 text-right">{count}개</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* 리뷰 목록 */}
+      <div className="space-y-4">
+        {reviews.map((review) => (
+          <ReviewCard key={review.id} review={review} />
+        ))}
+      </div>
     </div>
   );
 }
 
-function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
+function ReviewCard({ review }: { review: Review }) {
+  const ratingColor =
+    review.rating === 5 ? 'text-yellow-500' :
+      review.rating === 4 ? 'text-blue-500' :
+        'text-gray-500';
+
   return (
-    <thead
-      data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
-      {...props}
-    />
+    <Card>
+      <div className="flex items-start gap-4">
+        {/* Avatar */}
+        <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
+          <User className="w-6 h-6 text-white" />
+        </div>
+
+        <div className="flex-1 min-w-0">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-4 mb-2">
+            <div>
+              <p className="font-semibold text-gray-900">{review.userDisplayName}</p>
+              <div className="flex items-center gap-1 mt-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Star
+                    key={star}
+                    className={`w-4 h-4 ${star <= review.rating
+                      ? 'fill-yellow-400 text-yellow-400'
+                      : 'text-gray-300'
+                      }`}
+                  />
+                ))}
+                <span className="ml-2 font-semibold text-gray-900">
+                  {review.rating}.0
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 whitespace-nowrap">
+              {formatDate(review.createdAt)}
+            </p>
+          </div>
+
+          {/* Content */}
+          <p className="text-gray-700 leading-relaxed break-words">
+            {review.comment}
+          </p>
+
+          {/* Review Image */}
+          {review.images && review.images.length > 0 && (
+            <div className="mt-3">
+              <div className="relative w-32 h-32 rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
+                <img
+                  src={review.images[0]}
+                  alt="Review Type"
+                  className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                  onClick={() => window.open(review.images![0], '_blank')}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Updated indicator */}
+          {review.updatedAt && review.updatedAt !== review.createdAt && (
+            <p className="text-xs text-gray-500 mt-2">
+              (수정됨: {formatDate(review.updatedAt)})
+            </p>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
 
-function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
-  return (
-    <tbody
-      data-slot="table-body"
-      className={cn("[&_tr:last-child]:border-0", className)}
-      {...props}
-    />
-  );
-}
+```
 
-function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
-  return (
-    <tfoot
-      data-slot="table-footer"
-      className={cn(
-        "bg-muted/50 border-t font-medium [&>tr]:last:border-b-0",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+---
 
-function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
-  return (
-    <tr
-      data-slot="table-row"
-      className={cn(
-        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+## File: src\components\ui\scroll-area.tsx
 
-function TableHead({ className, ...props }: React.ComponentProps<"th">) {
-  return (
-    <th
-      data-slot="table-head"
-      className={cn(
-        "text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+```typescript
+"use client";
 
-function TableCell({ className, ...props }: React.ComponentProps<"td">) {
-  return (
-    <td
-      data-slot="table-cell"
-      className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+import * as React from "react";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area@1.2.3";
 
-function TableCaption({
+import { cn } from "./utils";
+
+function ScrollArea({
   className,
+  children,
   ...props
-}: React.ComponentProps<"caption">) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
   return (
-    <caption
-      data-slot="table-caption"
-      className={cn("text-muted-foreground mt-4 text-sm", className)}
+    <ScrollAreaPrimitive.Root
+      data-slot="scroll-area"
+      className={cn("relative", className)}
+      {...props}
+    >
+      <ScrollAreaPrimitive.Viewport
+        data-slot="scroll-area-viewport"
+        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+      >
+        {children}
+      </ScrollAreaPrimitive.Viewport>
+      <ScrollBar />
+      <ScrollAreaPrimitive.Corner />
+    </ScrollAreaPrimitive.Root>
+  );
+}
+
+function ScrollBar({
+  className,
+  orientation = "vertical",
+  ...props
+}: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
+  return (
+    <ScrollAreaPrimitive.ScrollAreaScrollbar
+      data-slot="scroll-area-scrollbar"
+      orientation={orientation}
+      className={cn(
+        "flex touch-none p-px transition-colors select-none",
+        orientation === "vertical" &&
+          "h-full w-2.5 border-l border-l-transparent",
+        orientation === "horizontal" &&
+          "h-2.5 flex-col border-t border-t-transparent",
+        className,
+      )}
+      {...props}
+    >
+      <ScrollAreaPrimitive.ScrollAreaThumb
+        data-slot="scroll-area-thumb"
+        className="bg-border relative flex-1 rounded-full"
+      />
+    </ScrollAreaPrimitive.ScrollAreaScrollbar>
+  );
+}
+
+export { ScrollArea, ScrollBar };
+
+```
+
+---
+
+## File: src\components\ui\textarea.tsx
+
+```typescript
+import * as React from "react";
+
+import { cn } from "./utils";
+
+function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
+  return (
+    <textarea
+      data-slot="textarea"
+      className={cn(
+        "resize-none border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 flex field-sizing-content min-h-16 w-full rounded-md border bg-input-background px-3 py-2 text-base transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+        className,
+      )}
       {...props}
     />
   );
 }
 
-export {
-  Table,
-  TableHeader,
-  TableBody,
-  TableFooter,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableCaption,
-};
+export { Textarea };
 
 ```
 
 ---
 
-## File: src\data\mockUsers.ts
+## File: src\components\ui\toggle-group.tsx
 
 ```typescript
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  phone: string;
-  createdAt: Date;
+"use client";
+
+import * as React from "react";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group@1.1.2";
+import { type VariantProps } from "class-variance-authority@0.7.1";
+
+import { cn } from "./utils";
+import { toggleVariants } from "./toggle";
+
+const ToggleGroupContext = React.createContext<
+  VariantProps<typeof toggleVariants>
+>({
+  size: "default",
+  variant: "default",
+});
+
+function ToggleGroup({
+  className,
+  variant,
+  size,
+  children,
+  ...props
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Root> &
+  VariantProps<typeof toggleVariants>) {
+  return (
+    <ToggleGroupPrimitive.Root
+      data-slot="toggle-group"
+      data-variant={variant}
+      data-size={size}
+      className={cn(
+        "group/toggle-group flex w-fit items-center rounded-md data-[variant=outline]:shadow-xs",
+        className,
+      )}
+      {...props}
+    >
+      <ToggleGroupContext.Provider value={{ variant, size }}>
+        {children}
+      </ToggleGroupContext.Provider>
+    </ToggleGroupPrimitive.Root>
+  );
 }
 
-export const mockUsers: User[] = [
-  {
-    id: 'user-1',
-    email: 'user@demo.com',
-    name: '김민수',
-    phone: '010-1234-5678',
-    createdAt: new Date('2024-01-15'),
-  },
-  {
-    id: 'user-2',
-    email: 'hong@example.com',
-    name: '홍길동',
-    phone: '010-2345-6789',
-    createdAt: new Date('2024-02-20'),
-  },
-  {
-    id: 'user-3',
-    email: 'park@example.com',
-    name: '박영희',
-    phone: '010-3456-7890',
-    createdAt: new Date('2024-03-10'),
-  },
-  {
-    id: 'user-4',
-    email: 'lee@example.com',
-    name: '이철수',
-    phone: '010-4567-8901',
-    createdAt: new Date('2024-04-05'),
-  },
-  {
-    id: 'user-5',
-    email: 'choi@example.com',
-    name: '최수진',
-    phone: '010-5678-9012',
-    createdAt: new Date('2024-05-12'),
-  },
-  {
-    id: 'user-6',
-    email: 'kang@example.com',
-    name: '강민지',
-    phone: '010-6789-0123',
-    createdAt: new Date('2024-06-18'),
-  },
-  {
-    id: 'user-7',
-    email: 'yoon@example.com',
-    name: '윤서준',
-    phone: '010-7890-1234',
-    createdAt: new Date('2024-07-22'),
-  },
-  {
-    id: 'user-8',
-    email: 'jung@example.com',
-    name: '정다은',
-    phone: '010-8901-2345',
-    createdAt: new Date('2024-08-08'),
-  },
-];
+function ToggleGroupItem({
+  className,
+  children,
+  variant,
+  size,
+  ...props
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Item> &
+  VariantProps<typeof toggleVariants>) {
+  const context = React.useContext(ToggleGroupContext);
+
+  return (
+    <ToggleGroupPrimitive.Item
+      data-slot="toggle-group-item"
+      data-variant={context.variant || variant}
+      data-size={context.size || size}
+      className={cn(
+        toggleVariants({
+          variant: context.variant || variant,
+          size: context.size || size,
+        }),
+        "min-w-0 flex-1 shrink-0 rounded-none shadow-none first:rounded-l-md last:rounded-r-md focus:z-10 focus-visible:z-10 data-[variant=outline]:border-l-0 data-[variant=outline]:first:border-l",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </ToggleGroupPrimitive.Item>
+  );
+}
+
+export { ToggleGroup, ToggleGroupItem };
 
 ```
 
 ---
 
-## File: src\hooks\useFirestoreDocument.ts
+## File: src\firebase.json
 
-```typescript
-import { useState, useEffect } from 'react';
-import { doc, onSnapshot, DocumentData } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-
-interface UseFirestoreDocumentResult<T> {
-  data: T | null;
-  loading: boolean;
-  error: Error | null;
-}
-
-export function useFirestoreDocument<T extends DocumentData>(
-  collectionName: string | string[],
-  documentId: string | null | undefined
-): UseFirestoreDocumentResult<T> {
-  // 안정적인 의존성 키 생성 (배열인 경우 문자열로 결합)
-  const collectionPath = Array.isArray(collectionName)
-    ? collectionName.join('/')
-    : collectionName;
-
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    if (!documentId) {
-      setData(null);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      // collectionPath(문자열)를 사용하여 참조 생성
-      const docRef = doc(db, collectionPath, documentId);
-
-      const unsubscribe = onSnapshot(
-        docRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            setData({
-              id: snapshot.id,
-              ...snapshot.data(),
-            } as T);
-          } else {
-            setData(null);
+```json
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
           }
-          setLoading(false);
-          setError(null);
-        },
-        (err) => {
-          console.error(`Firestore document error (${collectionPath}/${documentId}):`, err);
-          setError(err as Error);
-          setLoading(false);
-        }
-      );
-
-      return () => unsubscribe();
-    } catch (err) {
-      setError(err as Error);
-      setLoading(false);
-    }
-  }, [collectionPath, documentId]); // 안정된 문자열 키 사용
-
-  return { data, loading, error };
+        ]
+      },
+      {
+        "source": "/static/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      }
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
 }
 
 ```
 
 ---
 
-## File: src\hooks\useIsAdmin.ts
+## File: src\firestore.indexes.json
+
+```json
+{
+  "indexes": [
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "adminDeleted",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "adminDeleted",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "reviews",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "notices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "pinned",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "menus",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "category",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "endDate",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "coupons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
+```
+
+---
+
+## File: src\package.json
+
+```json
+{
+  "name": "custom-delivery-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "deploy": "npm run build && firebase deploy",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy:firestore": "firebase deploy --only firestore",
+    "deploy:storage": "firebase deploy --only storage",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage:rules"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "firebase": "^10.7.0",
+    "sonner": "^1.2.0",
+    "lucide-react": "^0.292.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "react-scripts": "^5.0.1",
+    "typescript": "^5.3.0",
+    "tailwindcss": "^4.0.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
+
+```
+
+---
+
+## File: src\pages\admin\AdminDailyReportPage.tsx
 
 ```typescript
 import { useState, useEffect } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../lib/firebase';
+import { doc, getDoc, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { useStore } from '../../contexts/StoreContext';
+import Card from '../../components/common/Card';
+import { BarChart, DollarSign, ShoppingBag, XCircle, TrendingUp } from 'lucide-react';
 
-export function useIsAdmin(userId: string | null | undefined) {
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // 데모 모드 확인
-  const isDemoMode = auth.app.options.apiKey === 'demo-api-key';
-
-  useEffect(() => {
-    if (!userId) {
-      setIsAdmin(false);
-      setLoading(false);
-      return;
-    }
-
-    // 데모 모드인 경우 로컬 스토리지에서 확인
-    if (isDemoMode) {
-      const demoIsAdmin = localStorage.getItem('demoIsAdmin') === 'true';
-      setIsAdmin(demoIsAdmin);
-      setLoading(false);
-      return;
-    }
-
-    // Firestore에서 관리자 권한 확인 (System Admin OR Store Owner)
-    // 1. System Admin 체크
-    const adminRef = doc(db, 'admins', userId);
-
-    // 2. Store Owner 체크 (단일 상점 모드: 'default')
-    const adminStoreRef = doc(db, 'adminStores', `${userId}_default`);
-
-    // 두 경로 중 하나라도 존재하면 관리자로 인정
-    // 실시간 리스너를 각각 연결하는 대신, 편의상 하나씩 확인하거나
-    // 여기서는 onSnapshot을 두 번 호출하여 상태를 합칩니다.
-
-    let isSystemAdmin = false;
-    let isStoreOwner = false;
-
-    // 리스너 관리를 위한 클린업 함수 배열
-    const unsubscribes: (() => void)[] = [];
-
-    const updateAdminStatus = () => {
-      setIsAdmin(isSystemAdmin || isStoreOwner);
-      setLoading(false);
-    };
-
-    const unsubAdmin = onSnapshot(adminRef, (doc) => {
-      isSystemAdmin = doc.exists() && doc.data()?.isAdmin === true;
-      updateAdminStatus();
-    }, (err) => {
-      console.error('System admin check failed:', err);
-      // 에러 시 무시 (false)
-    });
-    unsubscribes.push(unsubAdmin);
-
-    const unsubStore = onSnapshot(adminStoreRef, (doc) => {
-      isStoreOwner = doc.exists(); // adminStores에 레코드가 있으면 권한 보유로 간주 (role 체크 추가 가능)
-      updateAdminStatus();
-    }, (err) => {
-      console.error('Store owner check failed:', err);
-    });
-    unsubscribes.push(unsubStore);
-
-    return () => {
-      unsubscribes.forEach(unsub => unsub());
-    };
-  }, [userId, isDemoMode]);
-
-  return { isAdmin, loading };
-}
-```
-
----
-
-## File: src\pages\NicepayReturnPage.tsx
-
-```typescript
-/// <reference types="vite/client" />
-import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import Card from '../components/common/Card';
-import Button from '../components/common/Button';
-import { useStore } from '../contexts/StoreContext';
-
-// 개발용 임시 Cloud Functions URL (로컬 또는 프로덕션)
-// 실제 배포 시에는 자동으로 Functions 도메인을 사용하거나 프록시 설정 필요
-const FUNCTIONS_URL = import.meta.env.VITE_FUNCTIONS_URL || 'https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/nicepayConfirm';
-
-interface NicepayConfirmResponse {
-    success: boolean;
-    data?: any;
-    error?: string;
-    code?: string;
+interface DailyStats {
+    dateKey: string;
+    ordersTotal: number;
+    ordersPaid: number;
+    ordersCanceled: number;
+    grossSales: number;
+    avgOrderValue: number;
+    cancelRate: number;
+    topMenus: Array<{
+        menuId: string;
+        name: string;
+        qty: number;
+        sales: number;
+    }>;
+    updatedAt: any;
 }
 
-export default function NicepayReturnPage() {
-    const navigate = useNavigate();
-    const [searchParams] = useSearchParams();
+export default function AdminDailyReportPage() {
     const { store } = useStore();
-
-    const [status, setStatus] = useState<'loading' | 'success' | 'failed'>('loading');
-    const [message, setMessage] = useState('결제 결과를 확인하고 있습니다...');
+    const [stats, setStats] = useState<DailyStats | null>(null);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const verifyPayment = async () => {
-            // URL 파라미터 파싱
-            const orderId = searchParams.get('orderId');
-            const tid = searchParams.get('tid') || searchParams.get('TxTid');
-            const authToken = searchParams.get('authToken') || searchParams.get('AuthToken');
-            const resultCode = searchParams.get('resultCode') || searchParams.get('ResultCode');
-            const resultMsg = searchParams.get('resultMsg') || searchParams.get('ResultMsg');
-            const amount = searchParams.get('amt') || searchParams.get('Amt');
+        if (!store?.id) return;
 
-            console.log('NICEPAY Return Params:', { orderId, tid, resultCode, resultMsg });
-
-            if (resultCode !== '0000') {
-                setStatus('failed');
-                setMessage(resultMsg || '결제가 취소되었거나 승인되지 않았습니다.');
-                return;
-            }
-
-            if (!orderId || !tid || !authToken) {
-                setStatus('failed');
-                setMessage('필수 결제 정보가 누락되었습니다.');
-                return;
-            }
-
+        const fetchStats = async () => {
+            setLoading(true);
             try {
-                // Cloud Function 호출
-                // 주의: 배포 전에는 로컬 에뮬레이터나 배포된 URL을 정확히 지정해야 함.
-                // 여기서는 fetch 사용. (T2-4-2 Task에서 URL은 .env 등으로 관리 권장)
+                // 어제 날짜 구하기 (KST 고정: 클라이언트/브라우저 타임존 무시)
+                const now = new Date();
+                const kstNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+                const kstYesterday = new Date(kstNow.getTime() - 24 * 60 * 60 * 1000);
 
-                // **************************************************************************
-                // [중요] 실제 운영 환경에서는 Functions URL을 동적으로 주입해야 합니다.
-                // 현재는 예시로 상대 경로 또는 하드코딩된 URL을 사용할 수 있습니다.
-                // **************************************************************************
+                const yyyy = kstYesterday.getFullYear();
+                const mm = String(kstYesterday.getMonth() + 1).padStart(2, '0');
+                const dd = String(kstYesterday.getDate()).padStart(2, '0');
+                const dateKey = `${yyyy}-${mm}-${dd}`;
 
-                const response = await fetch('/nicepayConfirm', { // 리버스 프록시 사용 시
-                    // const response = await fetch('http://127.0.0.1:5001/YOUR_PROJECT/us-central1/nicepayConfirm', { // 로컬 테스트
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        tid,
-                        authToken,
-                        orderId,
-                        storeId: store?.id,
-                        amount: Number(amount)
-                    })
-                });
+                const docRef = doc(db, 'stores', store.id, 'stats_daily', dateKey);
+                const docSnap = await getDoc(docRef);
 
-                const result: NicepayConfirmResponse = await response.json();
-
-                if (result.success) {
-                    setStatus('success');
-                    setMessage('결제가 정상적으로 완료되었습니다.');
+                if (docSnap.exists()) {
+                    setStats(docSnap.data() as DailyStats);
                 } else {
-                    setStatus('failed');
-                    setMessage(result.error || '결제 승인 중 오류가 발생했습니다.');
+                    // 데이터가 없으면 null (집계 전)
+                    setStats(null);
                 }
             } catch (error) {
-                console.error('Payment Confirmation Error:', error);
-                setStatus('failed');
-                setMessage('서버 통신 중 오류가 발생했습니다.');
+                console.error('Failed to fetch stats:', error);
+            } finally {
+                setLoading(false);
             }
         };
 
-        if (store?.id) {
-            verifyPayment();
-        }
-    }, [searchParams, store]);
+        fetchStats();
+    }, [store?.id]);
+
+    if (loading) return <div className="p-8 text-center text-gray-500">리포트 로딩 중...</div>;
+
+    if (!stats) {
+        return (
+            <div className="p-8">
+                <h1 className="text-2xl font-bold mb-4">일일 리포트</h1>
+                <Card className="text-center py-12">
+                    <div className="flex justify-center mb-4">
+                        <BarChart className="w-12 h-12 text-gray-300" />
+                    </div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">아직 집계된 데이터가 없습니다</h3>
+                    <p className="text-gray-500">내일 다시 확인해주세요. (매일 00:10 자동 집계)</p>
+                </Card>
+            </div>
+        );
+    }
 
     return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-            <Card className="max-w-md w-full text-center py-10 px-6">
-                {status === 'loading' && (
-                    <div className="flex flex-col items-center">
-                        <Loader2 className="w-16 h-16 text-blue-600 animate-spin mb-6" />
-                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 승인 중...</h2>
-                        <p className="text-gray-600 animate-pulse">{message}</p>
-                    </div>
-                )}
+        <div className="p-6 max-w-7xl mx-auto">
+            <div className="mb-8">
+                <h1 className="text-2xl font-bold text-gray-900 mb-2">일일 리포트 ({stats.dateKey})</h1>
+                <p className="text-gray-500">어제 하루 매장의 주요 지표입니다.</p>
+            </div>
 
-                {status === 'success' && (
-                    <div className="flex flex-col items-center">
-                        <CheckCircle2 className="w-16 h-16 text-green-500 mb-6" />
-                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 성공!</h2>
-                        <p className="text-gray-600 mb-8">{message}</p>
-                        <Button
-                            fullWidth
-                            size="lg"
-                            onClick={() => navigate('/orders')}
-                        >
-                            주문 내역 보기
-                        </Button>
-                    </div>
-                )}
+            {/* Key Metrics Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <StatsCard
+                    title="총 매출"
+                    value={`${stats.grossSales.toLocaleString()}원`}
+                    icon={<DollarSign className="w-6 h-6 text-blue-600" />}
+                    subText={`객단가 ${stats.avgOrderValue.toLocaleString()}원`}
+                />
+                <StatsCard
+                    title="유효 주문"
+                    value={`${stats.ordersPaid}건`}
+                    icon={<ShoppingBag className="w-6 h-6 text-green-600" />}
+                    subText={`총 접수 ${stats.ordersTotal}건`}
+                />
+                <StatsCard
+                    title="취소율"
+                    value={`${(stats.cancelRate * 100).toFixed(1)}%`}
+                    icon={<XCircle className="w-6 h-6 text-red-600" />}
+                    subText={`취소 ${stats.ordersCanceled}건`}
+                />
+                <StatsCard
+                    title="성장률"
+                    value="-"
+                    icon={<TrendingUp className="w-6 h-6 text-purple-600" />}
+                    subText="전일 대비 데이터 부족"
+                />
+            </div>
 
-                {status === 'failed' && (
-                    <div className="flex flex-col items-center">
-                        <XCircle className="w-16 h-16 text-red-500 mb-6" />
-                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 실패</h2>
-                        <p className="text-gray-600 mb-8">{message}</p>
-                        <div className="flex gap-3 w-full">
-                            <Button
-                                variant="outline"
-                                fullWidth
-                                onClick={() => navigate('/')}
-                            >
-                                홈으로
-                            </Button>
-                            <Button
-                                fullWidth
-                                onClick={() => navigate('/checkout')}
-                            >
-                                다시 시도
-                            </Button>
-                        </div>
+            {/* Top Menus */}
+            <div className="grid lg:grid-cols-2 gap-6">
+                <Card title="인기 메뉴 TOP 5 (판매량 순)">
+                    <div className="space-y-4">
+                        {stats.topMenus.map((menu, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div className="flex items-center space-x-3">
+                                    <span className="w-6 h-6 flex items-center justify-center bg-white rounded-full text-sm font-bold text-gray-500 shadow-sm">
+                                        {idx + 1}
+                                    </span>
+                                    <span className="font-medium text-gray-900">{menu.name}</span>
+                                </div>
+                                <div className="text-right">
+                                    <p className="font-bold text-gray-900">{menu.qty}개</p>
+                                    <p className="text-xs text-gray-500">{menu.sales.toLocaleString()}원</p>
+                                </div>
+                            </div>
+                        ))}
+                        {stats.topMenus.length === 0 && (
+                            <p className="text-center text-gray-500 py-4">판매 내역이 없습니다.</p>
+                        )}
                     </div>
-                )}
-            </Card>
+                </Card>
+            </div>
         </div>
+    );
+}
+
+function StatsCard({ title, value, icon, subText }: { title: string; value: string; icon: React.ReactNode; subText?: string }) {
+    return (
+        <Card>
+            <div className="flex items-start justify-between">
+                <div>
+                    <p className="text-sm font-medium text-gray-500 mb-1">{title}</p>
+                    <h3 className="text-2xl font-bold text-gray-900 mb-1">{value}</h3>
+                    {subText && <p className="text-xs text-gray-400">{subText}</p>}
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                    {icon}
+                </div>
+            </div>
+        </Card>
     );
 }
 
@@ -1788,127 +1381,298 @@ export default function NicepayReturnPage() {
 
 ---
 
-## File: src\pages\OrderDetailPage.test.tsx
+## File: src\pages\OrdersPage.tsx
 
 ```typescript
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import OrderDetailPage from './OrderDetailPage';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Package, Clock, CheckCircle2, XCircle, ChevronRight, Star } from 'lucide-react';
+import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, OrderStatus } from '../types/order';
+import Card from '../components/common/Card';
+import Badge from '../components/common/Badge';
+import Button from '../components/common/Button';
+import ReviewModal from '../components/review/ReviewModal';
+import { useAuth } from '../contexts/AuthContext';
 import { useStore } from '../contexts/StoreContext';
-import { useFirestoreDocument } from '../hooks/useFirestoreDocument';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { getUserOrdersQuery } from '../services/orderService';
+import { Order } from '../types/order';
 
-// Mock dependencies
-vi.mock('react-router-dom', () => ({
-    useParams: vi.fn(),
-    useNavigate: vi.fn(),
-}));
+// 헬퍼 함수: Firestore Timestamp 처리를 위한 toDate
+const toDate = (date: any): Date => {
+  if (date?.toDate) return date.toDate();
+  if (date instanceof Date) return date;
+  if (typeof date === 'string') return new Date(date);
+  return new Date();
+};
 
-vi.mock('../contexts/StoreContext', () => ({
-    useStore: vi.fn(),
-}));
+import { useReorder } from '../hooks/useReorder';
 
-vi.mock('../hooks/useFirestoreDocument', () => ({
-    useFirestoreDocument: vi.fn(),
-}));
+export default function OrdersPage() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { store } = useStore();
+  const [filter, setFilter] = useState<OrderStatus | '전체'>('전체');
 
-vi.mock('../components/common/Card', () => ({
-    default: ({ children }: any) => <div data-testid="card">{children}</div>,
-}));
+  // R2-FIX-03: useReorder 훅을 상위로 이동
+  const { handleReorder, reordering } = useReorder();
 
-// Mock lucide icons
-vi.mock('lucide-react', () => ({
-    ArrowLeft: () => <span>ArrowLeft</span>,
-    MapPin: () => <span>MapPin</span>,
-    Phone: () => <span>Phone</span>,
-    CreditCard: () => <span>CreditCard</span>,
-    Clock: () => <span>Clock</span>,
-    Package: () => <span>Package</span>,
-    CheckCircle2: () => <span>CheckCircle2</span>,
-    MessageSquare: () => <span>MessageSquare</span>,
-    AlertCircle: () => <span>AlertCircle</span>,
-}));
+  // Firestore에서 현재 사용자의 주문 조회
+  const ordersQuery = (store?.id && user?.id)
+    ? getUserOrdersQuery(store.id, user.id)
+    : null;
 
-describe('OrderDetailPage', () => {
-    const mockNavigate = vi.fn();
-    const mockStore = { id: 'store_1' };
+  const { data: allOrders, loading } = useFirestoreCollection<Order>(ordersQuery);
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        (useNavigate as any).mockReturnValue(mockNavigate);
-        (useStore as any).mockReturnValue({ store: mockStore });
-        (useParams as any).mockReturnValue({ orderId: 'order_123' });
-    });
+  const filteredOrders = filter === '전체'
+    ? (allOrders || []).filter(order => order.status !== '결제대기')
+    : (allOrders || []).filter(order => order.status === filter);
 
-    it('should render loading state', () => {
-        (useFirestoreDocument as any).mockReturnValue({
-            data: null,
-            loading: true,
-            error: null
-        });
+  // 헬퍼 함수: 사용자용 상태 라벨 변환
+  const getDisplayStatus = (status: OrderStatus) => {
+    switch (status) {
+      case '접수': return '접수중';
+      case '접수완료': return '접수확인';
+      default: return ORDER_STATUS_LABELS[status];
+    }
+  };
 
-        render(<OrderDetailPage />);
-        expect(screen.getByText('주문 정보를 불러오는 중...')).toBeInTheDocument();
-    });
+  const filters: (OrderStatus | '전체')[] = ['전체', '접수', '접수완료', '조리중', '배달중', '완료', '취소'];
 
-    it('should render error/not found state', () => {
-        (useFirestoreDocument as any).mockReturnValue({
-            data: null,
-            loading: false,
-            error: new Error('Failed')
-        });
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-500">주문 내역을 불러오는 중...</div>
+      </div>
+    );
+  }
 
-        render(<OrderDetailPage />);
-        // Component renders one of these
-        expect(screen.getByText('주문 정보를 불러오는데 실패했습니다')).toBeInTheDocument();
-    });
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="container mx-auto px-4">
+        {/* Header */}
+        <div className="mb-6">
+          <h1 className="text-3xl mb-2">
+            <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
+              내 주문
+            </span>
+          </h1>
+          <p className="text-gray-600">주문 내역을 확인하고 관리하세요</p>
+        </div>
 
-    it('should render order details when loaded', () => {
-        const mockOrder = {
-            id: 'order_123',
-            status: '접수',
-            totalPrice: 15000,
-            items: [
-                { name: 'Pizza', price: 15000, quantity: 1, options: [] }
-            ],
-            createdAt: { toDate: () => new Date('2024-01-01T12:00:00') },
-            address: 'Seoul Grid',
-            phone: '010-1234-5678',
-            paymentType: 'card',
-            orderType: '배달'
-        };
+        {/* Status Filter */}
+        <div className="mb-6 flex space-x-2 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          {filters.map((status) => (
+            <button
+              key={status}
+              onClick={() => setFilter(status)}
+              className={`
+                px-4 py-2 rounded-lg whitespace-nowrap transition-all flex-shrink-0
+                ${filter === status
+                  ? 'gradient-primary text-white shadow-md'
+                  : 'bg-white text-gray-700 border border-gray-200 hover:border-blue-500'
+                }
+              `}
+            >
+              {status === '전체' ? '전체' : getDisplayStatus(status)}
+            </button>
+          ))}
+        </div>
 
-        (useFirestoreDocument as any).mockReturnValue({
-            data: mockOrder,
-            loading: false,
-            error: null
-        });
+        {/* Orders List */}
+        {filteredOrders.length > 0 ? (
+          <div className="space-y-4">
+            {filteredOrders.map((order) => (
+              <OrderCard
+                key={order.id}
+                order={order}
+                onClick={() => navigate(`/orders/${order.id}`)}
+                getDisplayStatus={getDisplayStatus}
+                onReorder={() => store?.id && handleReorder(store.id, order)}
+                isReordering={reordering}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-16">
+            <div className="w-32 h-32 mx-auto mb-6 bg-gray-100 rounded-full flex items-center justify-center">
+              <Package className="w-16 h-16 text-gray-400" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-3">
+              주문 내역이 없습니다
+            </h2>
+            <p className="text-gray-600 mb-8">
+              맛있는 메뉴를 주문해보세요
+            </p>
+            <Button onClick={() => navigate('/menu')}>
+              메뉴 둘러보기
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-        render(<OrderDetailPage />);
+interface OrderCardProps {
+  order: Order;
+  onClick: () => void;
+  getDisplayStatus: (s: OrderStatus) => string;
+  onReorder: () => void;
+  isReordering: boolean;
+}
 
-        expect(screen.getByText('주문 상세')).toBeInTheDocument();
-        expect(screen.getByText('주문번호: order_12')).toBeInTheDocument();
-        expect(screen.getByText('Pizza')).toBeInTheDocument();
-        // Price appears multiple times, check at least one
-        expect(screen.getAllByText('15,000원').length).toBeGreaterThan(0);
-    });
+function OrderCard({ order, onClick, getDisplayStatus, onReorder, isReordering }: OrderCardProps) {
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const statusColor = ORDER_STATUS_COLORS[order.status as OrderStatus];
+  const { store } = useStore(); // useReorder hook removed
 
-    it('should navigate back when button clicked', () => {
-        (useFirestoreDocument as any).mockReturnValue({
-            data: { id: '1', status: '접수', items: [], totalPrice: 0, createdAt: new Date() },
-            loading: false,
-            error: null
-        });
+  const getStatusIcon = (status: OrderStatus) => {
+    switch (status) {
+      case '접수':
+      case '접수완료':
+      case '조리중':
+        return <Clock className="w-5 h-5" />;
+      case '배달중':
+        return <Package className="w-5 h-5" />;
+      case '완료':
+        return <CheckCircle2 className="w-5 h-5" />;
+      case '취소':
+        return <XCircle className="w-5 h-5" />;
+    }
+  };
 
-        render(<OrderDetailPage />);
+  // 리뷰 작성 가능 여부 (완료 상태만)
+  const canReview = order.status === '완료';
 
-        const backButton = screen.getByText('주문 목록으로');
-        fireEvent.click(backButton);
+  return (
+    <>
+      <Card>
+        {/* 클릭 가능한 메인 영역 */}
+        <div onClick={onClick} className="cursor-pointer hover:bg-gray-50 transition-colors p-1 -m-1 rounded-lg">
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-center space-x-3">
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${statusColor.bg}`}>
+                <div className={statusColor.text}>
+                  {getStatusIcon(order.status)}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">
+                  {toDate(order.createdAt).toLocaleDateString('ko-KR', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+                <p className="text-xs text-gray-500">주문번호: {order.id.slice(0, 8)}</p>
+              </div>
+            </div>
+            <Badge variant={
+              order.status === '완료' ? 'success' :
+                order.status === '취소' ? 'danger' :
+                  order.status === '배달중' ? 'secondary' :
+                    'primary'
+            }>
+              {getDisplayStatus(order.status)}
+            </Badge>
+          </div>
 
-        expect(mockNavigate).toHaveBeenCalledWith('/orders');
-    });
-});
+          <div className="space-y-2 mb-4 pb-4 border-b border-gray-200">
+            {order.items.map((item, idx) => (
+              <div key={idx} className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  {item.imageUrl && (
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                      <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="font-medium text-gray-900">{item.name}</p>
+                    <p className="text-sm text-gray-600">수량: {item.quantity}개</p>
+                  </div>
+                </div>
+                <p className="text-sm font-semibold text-gray-900">
+                  {((item.price + (item.options?.reduce((sum: number, opt) => sum + (opt.price * (opt.quantity || 1)), 0) || 0)) * item.quantity).toLocaleString()}원
+                </p>
+              </div>
+            ))}
+          </div>
 
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">총 결제 금액</p>
+              <p className="text-2xl font-bold text-blue-600">
+                {order.totalPrice.toLocaleString()}원
+              </p>
+            </div>
+            <ChevronRight className="w-6 h-6 text-gray-400" />
+          </div>
+        </div>
+
+        {/* 하단 버튼 영역 */}
+        <div className="mt-4 pt-4 border-t border-gray-200 grid grid-cols-2 gap-3">
+          {/* 재주문 버튼 */}
+          <Button
+            variant="secondary"
+            fullWidth
+            onClick={(e) => {
+              e.stopPropagation();
+              onReorder();
+            }}
+            disabled={isReordering}
+          >
+            <Package className="w-4 h-4 mr-2" />
+            {isReordering ? '담는 중...' : '같은 메뉴 담기'}
+          </Button>
+
+          {/* 리뷰 버튼 (완료 시) */}
+          {canReview && (
+            order.reviewed ? (
+              <Button
+                variant="outline"
+                fullWidth
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowReviewModal(true);
+                }}
+              >
+                <Star className="w-4 h-4 fill-yellow-400 text-yellow-400 mr-2" />
+                리뷰 수정
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                fullWidth
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowReviewModal(true);
+                }}
+              >
+                <Star className="w-4 h-4 mr-2" />
+                리뷰 작성
+              </Button>
+            )
+          )}
+        </div>
+      </Card>
+
+      {/* 리뷰 모달 */}
+      {showReviewModal && (
+        <ReviewModal
+          orderId={order.id}
+          onClose={() => setShowReviewModal(false)}
+          onSuccess={() => {
+            // 주문 목록 새로고침
+            window.location.reload();
+          }}
+        />
+      )}
+    </>
+  );
+}
 ```
 
 ---
@@ -2316,185 +2080,451 @@ export default function StoreSetupWizard() {
 
 ---
 
-## File: src\storage.rules
+## File: src\services\storageService.ts
 
-```
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    
-    // 헬퍼 함수들
-    function isAuthenticated() {
-      return request.auth != null;
+```typescript
+import {
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject,
+  uploadBytesResumable,
+  UploadTask
+} from 'firebase/storage';
+import { storage } from '../lib/firebase';
+
+// 이미지 업로드
+export async function uploadImage(
+  file: File,
+  path: string,
+  onProgress?: (progress: number) => void
+): Promise<string> {
+  try {
+    const storageRef = ref(storage, path);
+
+    if (onProgress) {
+      // 진행상황을 추적하려면 uploadBytesResumable 사용
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      return new Promise((resolve, reject) => {
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            onProgress(progress);
+          },
+          (error) => {
+            console.error('이미지 업로드 실패:', error);
+            reject(error);
+          },
+          async () => {
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(downloadURL);
+          }
+        );
+      });
+    } else {
+      // 간단한 업로드
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      return downloadURL;
     }
-    
-    function isAdmin() {
-      return isAuthenticated() && 
-             firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.isAdmin == true;
-    }
-    
-    function isImageFile() {
-      return request.resource.contentType.matches('image/.*');
-    }
-    
-    function isSizeValid() {
-      // 최대 5MB
-      return request.resource.size < 5 * 1024 * 1024;
-    }
-    
-    // 메뉴 이미지
-    match /menus/{menuId}/{fileName} {
-      // 읽기: 로그인한 사용자
-      allow read: if isAuthenticated();
-      
-      // 업로드: 관리자만, 이미지 파일, 5MB 이하
-      allow write: if isAdmin() && 
-                     isImageFile() && 
-                     isSizeValid();
-                     
-      // 삭제: 관리자만
-      allow delete: if isAdmin();
-    }
-    
-    // 프로필 이미지
-    match /profiles/{userId}/{fileName} {
-      // 읽기: 로그인한 사용자
-      allow read: if isAuthenticated();
-      
-      // 업로드: 본인만, 이미지 파일, 5MB 이하
-      allow write: if isAuthenticated() && 
-                     request.auth.uid == userId &&
-                     isImageFile() && 
-                     isSizeValid();
-                     
-      // 삭제: 본인 또는 관리자
-      allow delete: if isAuthenticated() && 
-                      (request.auth.uid == userId || isAdmin());
-    }
-    
-    // 리뷰 이미지 (선택적)
-    match /reviews/{reviewId}/{fileName} {
-      // 읽기: 로그인한 사용자
-      allow read: if isAuthenticated();
-      
-      // 업로드: 로그인한 사용자, 이미지 파일, 5MB 이하
-      allow write: if isAuthenticated() && 
-                     isImageFile() && 
-                     isSizeValid();
-                     
-      // 삭제: 업로더 본인 또는 관리자 (추가 검증 필요)
-      allow delete: if isAdmin();
-    }
-    
-    // 이벤트 배너 이미지
-    match /events/{eventId}/{fileName} {
-      // 읽기: 로그인한 사용자
-      allow read: if isAuthenticated();
-      
-      // 업로드: 관리자만, 이미지 파일, 5MB 이하
-      allow write: if isAdmin() && 
-                     isImageFile() && 
-                     isSizeValid();
-                     
-      // 삭제: 관리자만
-      allow delete: if isAdmin();
-    }
-    
-    // 공지사항 이미지 (선택적)
-    match /notices/{noticeId}/{fileName} {
-      // 읽기: 로그인한 사용자
-      allow read: if isAuthenticated();
-      
-      // 업로드: 관리자만, 이미지 파일, 5MB 이하
-      allow write: if isAdmin() && 
-                     isImageFile() && 
-                     isSizeValid();
-                     
-      // 삭제: 관리자만
-      allow delete: if isAdmin();
-    }
-    
-    // 기본적으로 모든 다른 파일은 거부
-    match /{allPaths=**} {
-      allow read, write: if false;
-    }
+  } catch (error) {
+    console.error('이미지 업로드 실패:', error);
+    throw error;
   }
 }
 
+// 메뉴 이미지 업로드
+export async function uploadMenuImage(
+  file: File,
+  menuId: string,
+  onProgress?: (progress: number) => void
+): Promise<string> {
+  const path = `menus/${menuId}/${Date.now()}_${file.name}`;
+  return uploadImage(file, path, onProgress);
+}
+
+// 프로필 이미지 업로드
+export async function uploadProfileImage(
+  file: File,
+  userId: string,
+  onProgress?: (progress: number) => void
+): Promise<string> {
+  const path = `profiles/${userId}/${Date.now()}_${file.name}`;
+  return uploadImage(file, path, onProgress);
+}
+
+// 이미지 삭제
+export async function deleteImage(imageUrl: string): Promise<void> {
+  try {
+    // URL에서 파일 경로 추출
+    const imageRef = ref(storage, imageUrl);
+    await deleteObject(imageRef);
+  } catch (error) {
+    console.error('이미지 삭제 실패:', error);
+    throw error;
+  }
+}
+
+// 파일 유효성 검사
+export function validateImageFile(file: File): { valid: boolean; error?: string } {
+  const maxSize = 5 * 1024 * 1024; // 5MB
+  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+  if (!allowedTypes.includes(file.type)) {
+    return {
+      valid: false,
+      error: '지원되는 이미지 형식: JPG, PNG, WebP',
+    };
+  }
+
+  if (file.size > maxSize) {
+    return {
+      valid: false,
+      error: '이미지 크기는 5MB 이하여야 합니다',
+    };
+  }
+
+  return { valid: true };
+}
+
+// 이미지 리사이즈 (선택적)
+export async function resizeImage(
+  file: File,
+  maxWidth: number = 800,
+  maxHeight: number = 800
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // 비율 유지하면서 리사이즈
+        if (width > height) {
+          if (width > maxWidth) {
+            height *= maxWidth / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width *= maxHeight / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error('이미지 리사이즈 실패'));
+            }
+          },
+          file.type,
+          0.9
+        );
+      };
+
+      img.onerror = () => reject(new Error('이미지 로드 실패'));
+    };
+
+    reader.onerror = () => reject(new Error('파일 읽기 실패'));
+  });
+}
+
+// 이벤트 이미지 업로드
+export async function uploadEventImage(file: File): Promise<string> {
+  const path = `events/${Date.now()}_${file.name}`;
+  return uploadImage(file, path);
+}
+
+// 상점 이미지 업로드 (로고/배너)
+export async function uploadStoreImage(file: File, type: 'logo' | 'banner'): Promise<string> {
+  // 경로: store/{type}_{timestamp}_{filename}
+  const timestamp = Date.now();
+  const path = `store/${type}_${timestamp}_${file.name}`;
+  return uploadImage(file, path);
+}
+
+// 리뷰 이미지 업로드
+export async function uploadReviewImage(file: File): Promise<string> {
+  const path = `reviews/${Date.now()}_${file.name}`;
+  return uploadImage(file, path);
+}
+
 ```
 
 ---
 
-## File: src\types\menu.ts
+## File: src\services\userService.ts
 
 ```typescript
-export interface MenuOption {
-  id: string;
-  name: string;
-  price: number;
-  quantity?: number; // 옵션1용: 수량이 있는 옵션
+import { collection, query, where, getDocs, limit, orderBy } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { User } from '../types/user';
+
+// User 타입 정의 (기존 types/user.ts가 없다면 여기에 정의하거나 types 폴더에 추가해야 함)
+// 일단 간단한 인터페이스 사용
+export interface UserProfile {
+    id: string;
+    name: string;
+    phone: string;
+    email: string;
+    createdAt: any;
 }
 
-export interface Menu {
-  id: string;
-  name: string;
-  price: number;
-  category: string[];
-  description: string;
-  imageUrl?: string;
-  options?: MenuOption[];
-  soldout: boolean;
-  createdAt: Date;
+const COLLECTION_NAME = 'users';
+
+export async function searchUsers(keyword: string): Promise<UserProfile[]> {
+    try {
+        const usersRef = collection(db, COLLECTION_NAME);
+        let q;
+
+        // 전화번호로 검색 (정확히 일치하거나 시작하는 경우)
+        if (/^[0-9-]+$/.test(keyword)) {
+            q = query(
+                usersRef,
+                where('phone', '>=', keyword),
+                where('phone', '<=', keyword + '\uf8ff'),
+                limit(5)
+            );
+        } else {
+            // 이름으로 검색
+            q = query(
+                usersRef,
+                where('displayName', '>=', keyword),
+                where('displayName', '<=', keyword + '\uf8ff'),
+                limit(5)
+            );
+        }
+
+        const snapshot = await getDocs(q);
+        const users: UserProfile[] = [];
+
+        snapshot.forEach((doc) => {
+            const data = doc.data();
+            users.push({
+                id: doc.id,
+                name: data.displayName || data.name || '이름 없음',
+                phone: data.phone || '',
+                email: data.email || '',
+                createdAt: data.createdAt,
+            });
+        });
+
+        return users;
+    } catch (error) {
+        console.error('사용자 검색 실패:', error);
+        return [];
+    }
 }
 
-export const CATEGORIES = [
-  '인기메뉴',
-  '추천메뉴',
-  '기본메뉴',
-  '사이드메뉴',
-  '음료',
-  '주류',
-] as const;
+// 전체 사용자 목록 가져오기 (최근 가입순 20명)
+export async function getRecentUsers(): Promise<UserProfile[]> {
+    try {
+        const q = query(
+            collection(db, COLLECTION_NAME),
+            orderBy('createdAt', 'desc'),
+            limit(20)
+        );
 
-export type Category = typeof CATEGORIES[number];
+        const snapshot = await getDocs(q);
+        return snapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name || '이름 없음',
+            phone: doc.data().phone || '',
+            email: doc.data().email || '',
+            createdAt: doc.data().createdAt,
+        })) as UserProfile[];
+    } catch (error) {
+        console.error('사용자 목록 로드 실패:', error);
+        return [];
+    }
+}
+
 ```
 
 ---
 
-## File: tailwind.config.js
+## File: src\test\setup.ts
 
-```javascript
-/** @type {import('tailwindcss').Config} */
-export default {
-    content: [
-        "./index.html",
-        "./src/**/*.{js,ts,jsx,tsx}",
-    ],
-    theme: {
-        extend: {
-            colors: {
-                primary: {
-                    50: 'var(--color-primary-50)',
-                    100: 'var(--color-primary-100)',
-                    200: 'var(--color-primary-200)',
-                    300: 'var(--color-primary-300)',
-                    400: 'var(--color-primary-400)',
-                    500: 'var(--color-primary-500)',
-                    600: 'var(--color-primary-600)',
-                    700: 'var(--color-primary-700)',
-                    800: 'var(--color-primary-800)',
-                    900: 'var(--color-primary-900)',
-                },
-                secondary: {
-                    500: 'var(--color-secondary-500)',
-                    600: 'var(--color-secondary-600)',
-                }
-            }
-        },
-    },
-    plugins: [],
+```typescript
+import '@testing-library/jest-dom';
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+// 각 테스트 후 정리
+afterEach(() => {
+    cleanup();
+});
+
+```
+
+---
+
+## File: src\utils\formatDate.ts
+
+```typescript
+/**
+ * 날짜 포맷 유틸리티
+ */
+
+/**
+ * Firestore Timestamp 또는 Date를 "YYYY-MM-DD HH:mm:ss" 형식으로 변환
+ */
+export function formatDate(date: Date | { toDate?: () => Date }): string {
+  const d = date instanceof Date ? date : date.toDate?.() || new Date();
+  
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+/**
+ * "MM/DD HH:mm" 형식으로 변환
+ */
+export function formatDateShort(date: Date | { toDate?: () => Date }): string {
+  const d = date instanceof Date ? date : date.toDate?.() || new Date();
+  
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  
+  return `${month}/${day} ${hours}:${minutes}`;
+}
+
+/**
+ * 상대적 시간 표시 ("방금", "5분 전", "1시간 전", "어제", "MM/DD")
+ */
+export function formatDateRelative(date: Date | { toDate?: () => Date }): string {
+  const d = date instanceof Date ? date : date.toDate?.() || new Date();
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (seconds < 60) return '방금';
+  if (minutes < 60) return `${minutes}분 전`;
+  if (hours < 24) return `${hours}시간 전`;
+  if (days === 1) return '어제';
+  if (days < 7) return `${days}일 전`;
+  
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${month}/${day}`;
+}
+
+/**
+ * 날짜를 "YYYY년 MM월 DD일" 형식으로 변환
+ */
+export function formatDateKorean(date: Date | { toDate?: () => Date }): string {
+  const d = date instanceof Date ? date : date.toDate?.() || new Date();
+  
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  
+  return `${year}년 ${month}월 ${day}일`;
+}
+
+export default {
+  formatDate,
+  formatDateShort,
+  formatDateRelative,
+  formatDateKorean,
+};
+
+```
+
+---
+
+## File: vite.config.ts
+
+```typescript
+
+  import { defineConfig } from 'vite';
+  import react from '@vitejs/plugin-react-swc';
+  import path from 'path';
+
+  export default defineConfig({
+    plugins: [react()],
+    resolve: {
+      extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
+      alias: {
+        'vaul@1.1.2': 'vaul',
+        'sonner@2.0.3': 'sonner',
+        'recharts@2.15.2': 'recharts',
+        'react-resizable-panels@2.1.7': 'react-resizable-panels',
+        'react-hook-form@7.55.0': 'react-hook-form',
+        'react-day-picker@8.10.1': 'react-day-picker',
+        'next-themes@0.4.6': 'next-themes',
+        'lucide-react@0.487.0': 'lucide-react',
+        'input-otp@1.4.2': 'input-otp',
+        'embla-carousel-react@8.6.0': 'embla-carousel-react',
+        'cmdk@1.1.1': 'cmdk',
+        'class-variance-authority@0.7.1': 'class-variance-authority',
+        '@radix-ui/react-tooltip@1.1.8': '@radix-ui/react-tooltip',
+        '@radix-ui/react-toggle@1.1.2': '@radix-ui/react-toggle',
+        '@radix-ui/react-toggle-group@1.1.2': '@radix-ui/react-toggle-group',
+        '@radix-ui/react-tabs@1.1.3': '@radix-ui/react-tabs',
+        '@radix-ui/react-switch@1.1.3': '@radix-ui/react-switch',
+        '@radix-ui/react-slot@1.1.2': '@radix-ui/react-slot',
+        '@radix-ui/react-slider@1.2.3': '@radix-ui/react-slider',
+        '@radix-ui/react-separator@1.1.2': '@radix-ui/react-separator',
+        '@radix-ui/react-select@2.1.6': '@radix-ui/react-select',
+        '@radix-ui/react-scroll-area@1.2.3': '@radix-ui/react-scroll-area',
+        '@radix-ui/react-radio-group@1.2.3': '@radix-ui/react-radio-group',
+        '@radix-ui/react-progress@1.1.2': '@radix-ui/react-progress',
+        '@radix-ui/react-popover@1.1.6': '@radix-ui/react-popover',
+        '@radix-ui/react-navigation-menu@1.2.5': '@radix-ui/react-navigation-menu',
+        '@radix-ui/react-menubar@1.1.6': '@radix-ui/react-menubar',
+        '@radix-ui/react-label@2.1.2': '@radix-ui/react-label',
+        '@radix-ui/react-hover-card@1.1.6': '@radix-ui/react-hover-card',
+        '@radix-ui/react-dropdown-menu@2.1.6': '@radix-ui/react-dropdown-menu',
+        '@radix-ui/react-dialog@1.1.6': '@radix-ui/react-dialog',
+        '@radix-ui/react-context-menu@2.2.6': '@radix-ui/react-context-menu',
+        '@radix-ui/react-collapsible@1.1.3': '@radix-ui/react-collapsible',
+        '@radix-ui/react-checkbox@1.1.4': '@radix-ui/react-checkbox',
+        '@radix-ui/react-avatar@1.1.3': '@radix-ui/react-avatar',
+        '@radix-ui/react-aspect-ratio@1.1.2': '@radix-ui/react-aspect-ratio',
+        '@radix-ui/react-alert-dialog@1.1.6': '@radix-ui/react-alert-dialog',
+        '@radix-ui/react-accordion@1.2.3': '@radix-ui/react-accordion',
+        '@': path.resolve(__dirname, './src'),
+      },
+    },
+    build: {
+      target: 'esnext',
+      outDir: 'build',
+    },
+    server: {
+      port: 3000,
+      open: true,
+    },
+  });
 ```
 
 ---

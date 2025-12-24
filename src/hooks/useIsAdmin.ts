@@ -16,6 +16,14 @@ export function useIsAdmin(userId: string | null | undefined) {
       return;
     }
 
+    // [CRITICAL FIX] Master Admin Fallback
+    // DB 데이터가 소실되어도 admin@admin.com은 항상 관리자로 인식
+    if (auth.currentUser?.email === 'admin@admin.com') {
+      setIsAdmin(true);
+      setLoading(false);
+      return;
+    }
+
     // 데모 모드인 경우 로컬 스토리지에서 확인
     if (isDemoMode) {
       const demoIsAdmin = localStorage.getItem('demoIsAdmin') === 'true';

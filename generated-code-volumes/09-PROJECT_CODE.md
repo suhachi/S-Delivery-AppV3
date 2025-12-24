@@ -1,10 +1,38 @@
 ﻿# Project Code Volume 09
 
-Generated: 2025-12-23 14:30:55
+Generated: 2025-12-24 14:30:56
 Root: D:\projectsing\S-Delivery-AppV3\
 
-- Files in volume: 19
-- Approx size: 0.07 MB
+- Files in volume: 20
+- Approx size: 0.08 MB
+
+---
+
+## File: .eslintrc.cjs
+
+```javascript
+module.exports = {
+    root: true,
+    env: { browser: true, es2020: true },
+    extends: [
+        'eslint:recommended',
+        'plugin:@typescript-eslint/recommended',
+        'plugin:react-hooks/recommended',
+    ],
+    ignorePatterns: ['dist', '.eslintrc.cjs'],
+    parser: '@typescript-eslint/parser',
+    plugins: ['@typescript-eslint', 'react-refresh'],
+    rules: {
+        'react-refresh/only-export-components': [
+            'warn',
+            { allowConstantExport: true },
+        ],
+        '@typescript-eslint/no-explicit-any': 'warn',
+        '@typescript-eslint/no-unused-vars': 'warn',
+    },
+}
+
+```
 
 ---
 
@@ -14,7 +42,7 @@ Root: D:\projectsing\S-Delivery-AppV3\
 {
     "firestore": {
         "rules": "firestore.rules",
-        "indexes": "src/firestore.indexes.json"
+        "indexes": "firestore.indexes.json"
     },
     "functions": [
         {
@@ -53,1242 +81,1252 @@ Root: D:\projectsing\S-Delivery-AppV3\
 
 ---
 
-## File: scripts\reset_for_production.js
+## File: functions\lib\scheduled\statsDailyV3.js
 
 ```javascript
-import admin from 'firebase-admin';
-import serviceAccount from '../service-account-key.json' assert { type: 'json' };
-
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
-}
-
-const db = admin.firestore();
-
-async function deleteCollection(db, collectionPath, batchSize) {
-    const collectionRef = db.collection(collectionPath);
-    const query = collectionRef.orderBy('__name__').limit(batchSize);
-
-    return new Promise((resolve, reject) => {
-        deleteQueryBatch(db, query, resolve).catch(reject);
-    });
-}
-
-async function deleteQueryBatch(db, query, resolve) {
-    const snapshot = await query.get();
-
-    const batchSize = snapshot.size;
-    if (batchSize === 0) {
-        // When there are no documents left, we are done
-        resolve();
-        return;
-    }
-
-    const batch = db.batch();
-    snapshot.docs.forEach((doc) => {
-        batch.delete(doc.ref);
-    });
-    await batch.commit();
-
-    // Recurse on the next process tick, to avoid
-    // exploding the stack.
-    process.nextTick(() => {
-        deleteQueryBatch(db, query, resolve);
-    });
-}
-
-async function resetDatabase() {
-    console.log('🗑️  Starting Database Reset for Production...');
-
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.statsDailyV3 = void 0;
+const scheduler_1 = require("firebase-functions/v2/scheduler");
+const admin = require("firebase-admin");
+const dateKST_1 = require("../utils/dateKST");
+exports.statsDailyV3 = (0, scheduler_1.onSchedule)({
+    schedule: "10 0 * * *",
+    // Better: "every day 00:10" and set region or use explicit timezone if supported by v2.
+    // V2 supports timeZone.
+    timeZone: "Asia/Seoul",
+    region: "asia-northeast3", // Seoul region
+}, async (event) => {
+    const db = admin.firestore();
+    const { startKST, endKST, dateKey } = (0, dateKST_1.getYesterdayKSTRange)();
+    console.log(`[statsDailyV3] Starting aggregation for ${dateKey} (KST)`);
     try {
-        // 1. Delete 'stores/default' document (and its subcollections ideally, but Firestore requires manual deletion check)
-        // Deleting the document 'stores/default' puts the app in "Setup Mode".
-        console.log('Removing stores/default...');
-        await db.doc('stores/default').delete();
-
-        // 2. Delete subcollections of 'stores/default' (orders, menus, etc) checks
-        // Users might have generated data.
-        console.log('Cleaning up subcollections...');
-        await deleteCollection(db, 'stores/default/orders', 50);
-        await deleteCollection(db, 'stores/default/menus', 50);
-        await deleteCollection(db, 'stores/default/reviews', 50);
-        await deleteCollection(db, 'stores/default/notices', 50);
-        await deleteCollection(db, 'stores/default/events', 50);
-        await deleteCollection(db, 'stores/default/coupons', 50);
-
-        // 3. Clear 'users' collection? 
-        // User said "Start from Store Setup". If we keep users, they log in and if they have no store, they go to wizard.
-        // Keeping users is safer so they don't lose their account, but if "Complete Initial State", maybe delete users too.
-        // However, I don't have the service account key easily accessible in this environment potentially?
-        // Wait, the user has `functions` setup, so credentials might be there.
-        // But usually local `npm run dev` doesn't have admin privileges without key.
-
-        // Actually, I can rely on the user manually deleting or just deleting the store doc is enough to trigger the wizard.
-        // The script above assumes `service-account-key.json` exists. I haven't seen it in the file list.
-        // Use the client-side script approach if server key is missing?
-        // Client side deletion is harder due to rules. 
-        // I will write a script that assumes it can run with `firebase-admin` (which implies credentials).
-        // If not, I'll ask user to do it via console.
-
-        // WAIT! `scripts/seed_v2_data.mjs` was being edited by user.
-        // It likely uses `import { initializeApp } from 'firebase/app'` (Client SDK).
-        // I should use Client SDK for the script if possible, BUT client SDK cannot delete collections easily.
-        // I'll stick to just deleting the root logic doc for now.
-
-    } catch (error) {
-        console.error('Error resetting DB:', error);
+        const storesSnap = await db.collection("stores").get();
+        const batchHandler = new BatchHandler(db);
+        for (const storeDoc of storesSnap.docs) {
+            const storeId = storeDoc.id;
+            // Query Orders
+            const ordersRef = db.collection("stores").doc(storeId).collection("orders");
+            const ordersSnap = await ordersRef
+                .where("createdAt", ">=", startKST)
+                .where("createdAt", "<=", endKST)
+                .get();
+            if (ordersSnap.empty) {
+                console.log(`[${storeId}] No orders for ${dateKey}`);
+                continue;
+            }
+            // Aggregation Logic
+            let ordersTotal = 0;
+            let ordersPaid = 0;
+            let ordersCanceled = 0;
+            let grossSales = 0;
+            const menuStatsMap = new Map();
+            for (const doc of ordersSnap.docs) {
+                const order = doc.data();
+                if (order.status === '결제대기')
+                    continue; // exclude pending
+                ordersTotal++;
+                if (order.status === '취소') {
+                    ordersCanceled++;
+                }
+                else {
+                    // Paid/Valid (접수, 배달중, 완료 etc)
+                    ordersPaid++;
+                    grossSales += (order.totalPrice || 0);
+                    // Menu Stats
+                    if (order.items) {
+                        order.items.forEach(item => {
+                            const itemTotalFn = (item.price + (item.options?.reduce((s, o) => s + (o.price * (o.quantity || 1)), 0) || 0)) * item.quantity;
+                            const current = menuStatsMap.get(item.menuId) || { name: item.name, qty: 0, sales: 0 };
+                            current.qty += item.quantity;
+                            current.sales += itemTotalFn;
+                            menuStatsMap.set(item.menuId, current);
+                        });
+                    }
+                }
+            }
+            const avgOrderValue = ordersPaid > 0 ? Math.round(grossSales / ordersPaid) : 0;
+            const cancelRate = (ordersPaid + ordersCanceled) > 0
+                ? parseFloat((ordersCanceled / (ordersPaid + ordersCanceled)).toFixed(4))
+                : 0;
+            // Top Menus
+            const topMenus = Array.from(menuStatsMap.entries())
+                .map(([menuId, stats]) => ({ menuId, ...stats }))
+                .sort((a, b) => b.qty - a.qty) // Sort by Quantity
+                .slice(0, 5);
+            const statsDoc = {
+                dateKey,
+                ordersTotal,
+                ordersPaid,
+                ordersCanceled,
+                grossSales,
+                avgOrderValue,
+                cancelRate,
+                topMenus,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            };
+            // Save to subcollection
+            const statsRef = db.collection("stores").doc(storeId).collection("stats_daily").doc(dateKey);
+            await batchHandler.set(statsRef, statsDoc);
+            console.log(`[${storeId}] Stats computed: Paid=${ordersPaid}, Sales=${grossSales}`);
+        }
+        await batchHandler.commit(); // Final commit
+        console.log(`[statsDailyV3] Completed for ${dateKey}`);
     }
-
-    console.log('✅ Database reset complete. Ready for new store setup.');
-}
-
-// Check if we can run this.
-// If service account is missing, this will fail.
-// I will create a CLIENT SIDE script instead that runs in the browser context or via a helper page?
-// No, I can just create a `reset_db.js` and ask user to run it IF they have admin setup.
-// BUT, the safer bet is to use the existing `seed_v2_data.mjs` style which uses Client SDK.
-// With Client SDK, I can just delete `stores/default`.
-
-```
-
----
-
-## File: src\App.tsx
-
-```typescript
-import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Toaster } from 'sonner';
-import WelcomePage from './pages/WelcomePage';
-import LoginPage from './pages/LoginPage';
-import SignupPage from './pages/SignupPage';
-import MenuPage from './pages/MenuPage';
-import CartPage from './pages/CartPage';
-import OrdersPage from './pages/OrdersPage';
-import OrderDetailPage from './pages/OrderDetailPage';
-import CheckoutPage from './pages/CheckoutPage';
-import MyPage from './pages/MyPage';
-import StoreSetupWizard from './pages/StoreSetupWizard';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import AdminMenuManagement from './pages/admin/AdminMenuManagement';
-import AdminOrderManagement from './pages/admin/AdminOrderManagement';
-import AdminCouponManagement from './pages/admin/AdminCouponManagement';
-import AdminReviewManagement from './pages/admin/AdminReviewManagement';
-import AdminNoticeManagement from './pages/admin/AdminNoticeManagement';
-import AdminEventManagement from './pages/admin/AdminEventManagement';
-import AdminMemberPage from './pages/admin/AdminMemberPage';
-import AdminStatsPage from './pages/admin/AdminStatsPage';
-import AdminStoreSettings from './pages/admin/AdminStoreSettings';
-import NoticePage from './pages/NoticePage';
-import EventsPage from './pages/EventsPage';
-import ReviewBoardPage from './pages/ReviewBoardPage';
-import { CartProvider } from './contexts/CartContext';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { StoreProvider, useStore } from './contexts/StoreContext';
-import TopBar from './components/common/TopBar';
-import AdminOrderAlert from './components/admin/AdminOrderAlert';
-import NicepayReturnPage from './pages/NicepayReturnPage';
-import './styles/globals.css';
-
-// Protected Route Component
-function RequireAuth({ children, requireAdmin = false }: { children: React.ReactNode; requireAdmin?: boolean }) {
-  const { user, isAdmin, loading: authLoading } = useAuth();
-  const { store, loading: storeLoading } = useStore();
-  const location = useLocation();
-
-  if (authLoading || (requireAdmin && storeLoading)) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (requireAdmin && !isAdmin) {
-    return <Navigate to="/" replace />;
-  }
-
-  // 상점이 생성되지 않은 상태에서 관리자가 접속하면 상점 생성 페이지로 리다이렉트
-  if (requireAdmin && isAdmin && !store && !storeLoading) {
-    if (location.pathname !== '/store-setup') {
-      return <Navigate to="/store-setup" replace />;
+    catch (error) {
+        console.error("[statsDailyV3] Error:", error);
     }
-  }
-
-  return <>{children}</>;
-}
-
-function AppContent() {
-  const { user, loading: authLoading } = useAuth();
-  const { store, loading: storeLoading } = useStore();
-
-  // 테마 색상 적용
-  React.useEffect(() => {
-    if (store?.primaryColor) {
-      const root = document.documentElement;
-      const primary = store.primaryColor;
-
-      // 메인 색상 적용
-      root.style.setProperty('--color-primary-500', primary);
-
-      // 그라데이션 등을 위한 파생 색상 생성 (간단히 조금 더 어두운 색상으로 설정)
-      // 실제로는 더 정교한 색상 팔레트 생성 로직이 필요할 수 있음
-      root.style.setProperty('--color-primary-600', adjustBrightness(primary, -10));
+});
+// Simple Helper for Batches (Firestore limit 500)
+class BatchHandler {
+    constructor(db) {
+        this.count = 0;
+        this.db = db;
+        this.batch = db.batch();
     }
-  }, [store?.primaryColor]);
-
-  // 상점 이름으로 타이틀 변경
-  React.useEffect(() => {
-    if (store?.name) {
-      document.title = store.name;
-    } else {
-      document.title = 'Simple Delivery App';
+    async set(ref, data) {
+        this.batch.set(ref, data, { merge: true });
+        this.count++;
+        if (this.count >= 490) {
+            await this.commit();
+        }
     }
-  }, [store?.name]);
-
-  // 디버깅: 로딩 상태 확인
-  if (authLoading || storeLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">로딩 중...</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <CartProvider>
-      <div className="min-h-screen bg-gray-50">
-        {user && <TopBar />}
-        <AdminOrderAlert />
-        <Routes>
-          <Route path="/" element={<WelcomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/signup" element={<SignupPage />} />
-          <Route path="/menu" element={<RequireAuth><MenuPage /></RequireAuth>} />
-
-          <Route path="/cart" element={<RequireAuth><CartPage /></RequireAuth>} />
-          <Route path="/payment/nicepay/return" element={<NicepayReturnPage />} />
-          <Route path="/nicepay/return" element={<NicepayReturnPage />} />
-          <Route path="/notices" element={<NoticePage />} />
-          <Route path="/events" element={<EventsPage />} />
-
-          {/* ... (imports remain the same) */}
-
-          {/* ... inside AppContent routes ... */}
-          <Route path="/orders" element={<RequireAuth><OrdersPage /></RequireAuth>} />
-          <Route path="/orders/:orderId" element={<RequireAuth><OrderDetailPage /></RequireAuth>} />
-          <Route path="/reviews" element={<ReviewBoardPage />} />
-          <Route path="/checkout" element={<RequireAuth><CheckoutPage /></RequireAuth>} />
-
-          <Route path="/mypage" element={<RequireAuth><MyPage /></RequireAuth>} />
-
-          {/* Admin Routes */}
-          <Route path="/admin" element={<RequireAuth requireAdmin><AdminDashboard /></RequireAuth>} />
-          <Route path="/admin/menus" element={<RequireAuth requireAdmin><AdminMenuManagement /></RequireAuth>} />
-          <Route path="/admin/orders" element={<RequireAuth requireAdmin><AdminOrderManagement /></RequireAuth>} />
-          <Route path="/admin/coupons" element={<RequireAuth requireAdmin><AdminCouponManagement /></RequireAuth>} />
-          <Route path="/admin/reviews" element={<RequireAuth requireAdmin><AdminReviewManagement /></RequireAuth>} />
-          <Route path="/admin/notices" element={<RequireAuth requireAdmin><AdminNoticeManagement /></RequireAuth>} />
-          <Route path="/admin/events" element={<RequireAuth requireAdmin><AdminEventManagement /></RequireAuth>} />
-          <Route path="/admin/members" element={<RequireAuth requireAdmin><AdminMemberPage /></RequireAuth>} />
-          <Route path="/admin/stats" element={<RequireAuth requireAdmin><AdminStatsPage /></RequireAuth>} />
-          <Route path="/admin/store-settings" element={<RequireAuth requireAdmin><AdminStoreSettings /></RequireAuth>} />
-
-          {/* Store Setup */}
-          <Route path="/store-setup" element={<RequireAuth requireAdmin><StoreSetupWizard /></RequireAuth>} />
-        </Routes>
-      </div>
-      <Toaster position="bottom-center" richColors duration={2000} />
-    </CartProvider>
-  );
-}
-
-// 색상 밝기 조절 유틸리티
-function adjustBrightness(hex: string, percent: number) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const amt = Math.round(2.55 * percent);
-  const R = (num >> 16) + amt;
-  const G = (num >> 8 & 0x00FF) + amt;
-  const B = (num & 0x0000FF) + amt;
-  return '#' + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 + (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 + (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
-}
-
-export default function App() {
-  return (
-    <BrowserRouter>
-      <AuthProvider>
-        <StoreProvider>
-          <AppContent />
-        </StoreProvider>
-      </AuthProvider>
-    </BrowserRouter>
-  );
-}
-```
-
----
-
-## File: src\components\review\ReviewPreview.tsx
-
-```typescript
-import { Link } from 'react-router-dom';
-import { Star, ChevronRight, User } from 'lucide-react';
-import { useStore } from '../../contexts/StoreContext';
-import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
-import { getAllReviewsQuery } from '../../services/reviewService';
-import { Review } from '../../types/review';
-import { formatDate } from '../../utils/formatDate';
-import Card from '../common/Card';
-
-export default function ReviewPreview() {
-    const { store } = useStore();
-    const storeId = store?.id;
-
-    // Fetch reviews (sorted by newest First)
-    const { data: reviews, loading } = useFirestoreCollection<Review>(
-        storeId ? getAllReviewsQuery(storeId) : null
-    );
-
-    // Take only top 5 for preview
-    const recentReviews = reviews ? reviews.slice(0, 5) : [];
-
-    if (!storeId || loading) return null;
-
-    if (recentReviews.length === 0) {
-        return null; // hide if no reviews
+    async commit() {
+        if (this.count > 0) {
+            await this.batch.commit();
+            this.batch = this.db.batch();
+            this.count = 0;
+        }
     }
-
-    return (
-        <div className="container mx-auto px-4 mt-8 mb-12">
-            <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold flex items-center gap-2">
-                    <span className="text-primary-600">💬</span>
-                    <span>생생 리뷰 미리보기</span>
-                </h2>
-                <Link
-                    to="/reviews"
-                    className="text-sm text-gray-500 hover:text-primary-600 flex items-center gap-1"
-                >
-                    더보기 <ChevronRight className="w-4 h-4" />
-                </Link>
-            </div>
-
-            <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-4 snap-x snap-mandatory">
-                {recentReviews.map((review) => (
-                    <div key={review.id} className="min-w-[280px] w-[280px] snap-start">
-                        <Card
-                            className="h-full flex flex-col p-4 bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow cursor-pointer group overflow-hidden"
-                            padding="none"
-                        >
-                            {/* Image if available */}
-                            {review.images && review.images.length > 0 && (
-                                <div className="relative w-full h-32 overflow-hidden bg-gray-100">
-                                    <img
-                                        src={review.images[0]}
-                                        alt="Review"
-                                        className="w-full h-full object-cover transform transition-all duration-500 group-hover:scale-110 group-hover:brightness-105"
-                                    />
-                                </div>
-                            )}
-
-                            <div className="p-4 flex-1 flex flex-col">
-                                <div className="flex items-center justify-between mb-3">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                                            <User className="w-4 h-4 text-blue-600" />
-                                        </div>
-                                        <div className="flex flex-col">
-                                            <span className="text-sm font-semibold text-gray-900 truncate max-w-[100px]">
-                                                {review.userDisplayName}
-                                            </span>
-                                            <div className="flex items-center">
-                                                <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                                                <span className="text-xs font-bold ml-1">{review.rating}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <span className="text-xs text-gray-400">{formatDate(review.createdAt)}</span>
-                                </div>
-
-                                <div className="flex-1">
-                                    <p className="text-sm text-gray-600 line-clamp-3 break-words">
-                                        {review.comment}
-                                    </p>
-                                </div>
-                            </div>
-                        </Card>
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
 }
-
+//# sourceMappingURL=statsDailyV3.js.map
 ```
 
 ---
 
-## File: src\components\ui\alert.tsx
-
-```typescript
-import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority@0.7.1";
-
-import { cn } from "./utils";
-
-const alertVariants = cva(
-  "relative w-full rounded-lg border px-4 py-3 text-sm grid has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] grid-cols-[0_1fr] has-[>svg]:gap-x-3 gap-y-0.5 items-start [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
-  {
-    variants: {
-      variant: {
-        default: "bg-card text-card-foreground",
-        destructive:
-          "text-destructive bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-destructive/90",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  },
-);
-
-function Alert({
-  className,
-  variant,
-  ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
-  return (
-    <div
-      data-slot="alert"
-      role="alert"
-      className={cn(alertVariants({ variant }), className)}
-      {...props}
-    />
-  );
-}
-
-function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-title"
-      className={cn(
-        "col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AlertDescription({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-description"
-      className={cn(
-        "text-muted-foreground col-start-2 grid justify-items-start gap-1 text-sm [&_p]:leading-relaxed",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export { Alert, AlertTitle, AlertDescription };
-
-```
-
----
-
-## File: src\contexts\AuthContext.tsx
-
-```typescript
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useFirebaseAuth } from '../hooks/useFirebaseAuth';
-import { useIsAdmin } from '../hooks/useIsAdmin';
-
-interface User {
-  id: string;
-  email: string;
-  displayName?: string;
-  phone?: string;
-}
-
-interface AuthContextType {
-  user: User | null;
-  isAdmin: boolean;
-  loading: boolean;
-  login: (email: string, password: string) => Promise<any>;
-  signup: (email: string, password: string, displayName?: string, phone?: string) => Promise<any>;
-  logout: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const { user, loading: authLoading, signup, login, logout } = useFirebaseAuth();
-  const { isAdmin, loading: adminLoading } = useIsAdmin(user?.id);
-  // TEMPORARY TEST OVERRIDE: Force Admin
-  // const isAdmin = true;
-  // const adminLoading = false;
-
-  const loading = authLoading || adminLoading;
-
-  return (
-    <AuthContext.Provider value={{ user, isAdmin, loading, login, signup, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-}
-```
-
----
-
-## File: src\data\mockOrders.ts
-
-```typescript
-import { Order } from '../types/order';
-
-// This would be replaced with actual Firestore/Supabase data
-export const mockOrders: Order[] = [
-  {
-    id: 'order-1',
-    userId: 'user-1',
-    items: [
-      {
-        menuId: '1',
-        name: '소고기 쌀국수',
-        price: 9500,
-        quantity: 2,
-        options: [{ name: '면 추가', price: 2000 }],
-        imageUrl: 'https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=800&q=80',
-      },
-      {
-        menuId: '8',
-        name: '베트남 커피',
-        price: 4500,
-        quantity: 1,
-        imageUrl: 'https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?w=800&q=80',
-      },
-    ],
-    totalPrice: 29500,
-    status: '배달중',
-    address: '서울시 강남구 테헤란로 123',
-    phone: '010-1234-5678',
-    memo: '문 앞에 놔주세요',
-    paymentType: '앱결제',
-    createdAt: new Date('2024-12-04T12:30:00'),
-  },
-  {
-    id: 'order-2',
-    userId: 'user-1',
-    items: [
-      {
-        menuId: '2',
-        name: '해물 쌀국수',
-        price: 11000,
-        quantity: 1,
-        imageUrl: 'https://images.unsplash.com/photo-1555126634-323283e090fa?w=800&q=80',
-      },
-    ],
-    totalPrice: 14000,
-    status: '완료',
-    address: '서울시 강남구 테헤란로 123',
-    phone: '010-1234-5678',
-    paymentType: '만나서카드',
-    createdAt: new Date('2024-12-03T18:20:00'),
-  },
-  {
-    id: 'order-3',
-    userId: 'user-1',
-    items: [
-      {
-        menuId: '5',
-        name: '월남쌈',
-        price: 7000,
-        quantity: 2,
-        imageUrl: 'https://images.unsplash.com/photo-1559054663-e8fbaa5b6c53?w=800&q=80',
-      },
-      {
-        menuId: '7',
-        name: '짜조',
-        price: 6000,
-        quantity: 1,
-        imageUrl: 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?w=800&q=80',
-      },
-    ],
-    totalPrice: 23000,
-    status: '완료',
-    address: '서울시 강남구 테헤란로 123',
-    phone: '010-1234-5678',
-    paymentType: '만나서현금',
-    createdAt: new Date('2024-12-01T19:45:00'),
-  },
-];
-
-```
-
----
-
-## File: src\firestore.indexes.json
+## File: package.json
 
 ```json
 {
-  "indexes": [
-    {
-      "collectionGroup": "orders",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
+    "name": "simple-delivery-app",
+    "version": "0.1.0",
+    "private": true,
+    "dependencies": {
+        "@radix-ui/react-accordion": "^1.2.3",
+        "@radix-ui/react-alert-dialog": "^1.1.6",
+        "@radix-ui/react-aspect-ratio": "^1.1.2",
+        "@radix-ui/react-avatar": "^1.1.3",
+        "@radix-ui/react-checkbox": "^1.1.4",
+        "@radix-ui/react-collapsible": "^1.1.3",
+        "@radix-ui/react-context-menu": "^2.2.6",
+        "@radix-ui/react-dialog": "^1.1.6",
+        "@radix-ui/react-dropdown-menu": "^2.1.6",
+        "@radix-ui/react-hover-card": "^1.1.6",
+        "@radix-ui/react-label": "^2.1.2",
+        "@radix-ui/react-menubar": "^1.1.6",
+        "@radix-ui/react-navigation-menu": "^1.2.5",
+        "@radix-ui/react-popover": "^1.1.6",
+        "@radix-ui/react-progress": "^1.1.2",
+        "@radix-ui/react-radio-group": "^1.2.3",
+        "@radix-ui/react-scroll-area": "^1.2.3",
+        "@radix-ui/react-select": "^2.1.6",
+        "@radix-ui/react-separator": "^1.1.2",
+        "@radix-ui/react-slider": "^1.2.3",
+        "@radix-ui/react-slot": "^1.1.2",
+        "@radix-ui/react-switch": "^1.1.3",
+        "@radix-ui/react-tabs": "^1.1.3",
+        "@radix-ui/react-toggle": "^1.1.2",
+        "@radix-ui/react-toggle-group": "^1.1.2",
+        "@radix-ui/react-tooltip": "^1.1.8",
+        "class-variance-authority": "^0.7.1",
+        "clsx": "*",
+        "cmdk": "^1.1.1",
+        "dotenv": "^17.2.3",
+        "embla-carousel-react": "^8.6.0",
+        "firebase": "^12.6.0",
+        "input-otp": "^1.4.2",
+        "lucide-react": "^0.487.0",
+        "next-themes": "^0.4.6",
+        "react": "^18.3.1",
+        "react-daum-postcode": "^3.2.0",
+        "react-day-picker": "^8.10.1",
+        "react-dom": "^18.3.1",
+        "react-hook-form": "^7.55.0",
+        "react-resizable-panels": "^2.1.7",
+        "react-router-dom": "*",
+        "recharts": "^2.15.4",
+        "sonner": "^2.0.3",
+        "tailwind-merge": "*",
+        "tailwindcss": "*",
+        "vaul": "^1.1.2"
     },
-    {
-      "collectionGroup": "orders",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "userId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
+    "devDependencies": {
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.0",
+        "@testing-library/user-event": "^14.6.1",
+        "@types/node": "^20.10.0",
+        "@types/react": "^19.2.7",
+        "@types/react-dom": "^19.2.3",
+        "@typescript-eslint/eslint-plugin": "^8.49.0",
+        "@typescript-eslint/parser": "^8.49.0",
+        "@vitejs/plugin-react-swc": "^3.10.2",
+        "eslint": "^8.57.0",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "eslint-plugin-react-refresh": "^0.4.24",
+        "jsdom": "^27.3.0",
+        "vite": "6.3.5",
+        "vitest": "^4.0.15"
     },
-    {
-      "collectionGroup": "orders",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "adminDeleted",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "orders",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "adminDeleted",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "reviews",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "notices",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "pinned",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "menus",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "category",
-          "arrayConfig": "CONTAINS"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "events",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "active",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "startDate",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "events",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "active",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "endDate",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "coupons",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "isActive",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+        "preview": "vite preview",
+        "firebase:init": "firebase init",
+        "firebase:login": "firebase login",
+        "test": "vitest",
+        "test:ui": "vitest --ui",
+        "predeploy": "node scripts/check-deploy.mjs",
+        "firebase:deploy": "npm run predeploy && firebase deploy",
+        "firebase:deploy:hosting": "npm run predeploy && firebase deploy --only hosting",
+        "firebase:deploy:firestore": "npm run predeploy && firebase deploy --only firestore:rules,firestore:indexes",
+        "firebase:deploy:storage": "npm run predeploy && firebase deploy --only storage",
+        "generate:code-md": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-project-code-md.ps1",
+        "generate:code-10": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-project-code-volumes.ps1 -VolumeCount 10",
+        "generate:multi-projects": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-multi-project-code.ps1"
     }
-  ],
-  "fieldOverrides": []
 }
+
 ```
 
 ---
 
-## File: src\lib\firestorePaths.ts
+## File: scripts\check-deploy.mjs
 
-```typescript
+```javascript
+#!/usr/bin/env node
+
 /**
- * Firestore 경로 헬퍼
- * 멀티 테넌트 데이터 격리를 위한 경로 생성 유틸리티
+ * 배포 전 필수 체크 스크립트 (Pre-flight Check)
  * 
- * 기존: collection(db, 'menus')
- * 변경: collection(db, getMenusPath(storeId))
+ * 이 스크립트는 배포 명령어(npm run deploy 등) 실행 시 자동으로 호출되어
+ * 다음 사항을 검증합니다:
+ * 1. Firebase 로그인 계정 (REQUIRED_ACCOUNT)
+ * 2. 활성 Firebase 프로젝트 (Active Project vs .firebaserc)
+ * 3. 빌드 결과물 존재 여부 (build 폴더)
  */
 
-/**
- * 상점별 메뉴 경로
- * stores/{storeId}/menus
- */
-export function getMenusPath(storeId: string): string {
-  return `stores/${storeId}/menus`;
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// --- 환경 설정 ---
+const REQUIRED_ACCOUNT = 'jsbae59@gmail.com'; // 배포 권한이 있는 유일한 계정
+const BUILD_DIR_NAME = 'build'; // Vite 기본 출력 디렉터리
+
+let hasError = false;
+let requiredProject = null;
+
+console.log('\n🔍 [Safety Check] 배포 전 필수 점검 시작...\n');
+
+// 0. 타겟 프로젝트 식별 (.firebaserc 파싱)
+try {
+    const firebasercPath = join(__dirname, '..', '.firebaserc');
+    if (fs.existsSync(firebasercPath)) {
+        const firebaserc = JSON.parse(fs.readFileSync(firebasercPath, 'utf-8'));
+        requiredProject = firebaserc.projects?.default;
+        // console.log(`ℹ️  Target Project defined in .firebaserc: ${requiredProject}`);
+    } else {
+        console.warn('⚠️  .firebaserc 파일이 없습니다. 프로젝트 일치 여부를 확인할 수 없습니다.');
+    }
+} catch (e) {
+    console.warn('⚠️  .firebaserc 파싱 실패:', e.message);
 }
 
-/**
- * 상점별 주문 경로
- * stores/{storeId}/orders
- */
-export function getOrdersPath(storeId: string): string {
-  return `stores/${storeId}/orders`;
+// 1. Firebase 계정 확인
+process.stdout.write('1️⃣  Firebase 계정 확인... ');
+try {
+    // firebase login:list를 사용하여 현재 로그인된 계정을 확인합니다.
+    const loginOutput = execSync('firebase login:list', { encoding: 'utf-8', stdio: 'pipe' });
+    const loggedInAccount = loginOutput.match(/Logged in as (.+)/)?.[1]?.trim();
+
+    if (!loggedInAccount) {
+        console.log('❌\n   Firebase에 로그인되어 있지 않습니다.');
+        hasError = true;
+    } else if (loggedInAccount !== REQUIRED_ACCOUNT) {
+        console.log('❌');
+        console.error(`   ⛔ 잘못된 계정입니다: ${loggedInAccount}`);
+        console.error(`   ✅ 필수 계정: ${REQUIRED_ACCOUNT}`);
+        console.error('   -> 해결: firebase logout 후 firebase login 으로 전환하세요.');
+        hasError = true;
+    } else {
+        console.log(`✅ (${loggedInAccount})`);
+    }
+} catch (error) {
+    // 명령어가 실패한다는 건 로그인이 안되어있거나 CLI 문제
+    console.log('❌ 오류 발생');
+    console.error('   Firebase CLI 실행 중 오류:', error.message);
+    hasError = true;
 }
 
-/**
- * 상점별 쿠폰 경로
- * stores/{storeId}/coupons
- */
-export function getCouponsPath(storeId: string): string {
-  return `stores/${storeId}/coupons`;
+// 2. Firebase 프로젝트 확인
+process.stdout.write('2️⃣  Firebase 프로젝트 확인... ');
+try {
+    let activeProject = null;
+
+    // firebase use 로 현재 활성 alias 확인
+    try {
+        const useOutput = execSync('firebase use', { encoding: 'utf-8', stdio: 'pipe' });
+        const activeMatch = useOutput.match(/Active Project:\s*(.+)/i);
+        // "Active Project: complex-name (alias)" 형식일 수 있음
+        if (activeMatch) {
+            activeProject = activeMatch[1]?.trim();
+        } else {
+            // "Active Project" 텍스트 없이 그냥 alias 목록만 나오는 경우, * 표시된 줄 찾기
+            const asteriskMatch = useOutput.match(/\*\s*(\S+)/);
+            if (asteriskMatch) {
+                // alias 이름일 수 있음. alias면 실제 ID를 찾아야 함.
+                // .firebaserc에서 매핑 확인 필요하지만 복잡하므로 activeProject가 ID라고 가정하거나
+                // use output에 괄호로 ID가 같이 나오는지 확인 "(project-id)"
+                const idInParens = useOutput.match(/\*\s*.+\s*\((.+)\)/);
+                activeProject = idInParens ? idInParens[1] : asteriskMatch[1];
+            }
+        }
+    } catch (e) { /* ignore */ }
+
+    // 만약 activeProject를 못 찾았고, .firebaserc에 default가 있다면 default를 사용한다고 가정
+    if (!activeProject && requiredProject) {
+        // CLI가 active project가 없으면 default를 씀
+        activeProject = requiredProject;
+    }
+
+    if (!activeProject) {
+        console.log('❌');
+        console.error('   활성 프로젝트를 확인할 수 없습니다.');
+        hasError = true;
+    } else if (requiredProject && activeProject !== requiredProject) {
+        console.log('❌');
+        console.error(`   ⛔ 프로젝트 불일치!`);
+        console.error(`   Current Active : ${activeProject}`);
+        console.error(`   Target (.rc)   : ${requiredProject}`);
+        console.error(`   -> 해결: 'firebase use default' 또는 'firebase use ${requiredProject}' 실행`);
+        hasError = true;
+    } else {
+        console.log(`✅ (${activeProject})`);
+    }
+} catch (error) {
+    console.log('❌ 오류');
+    console.error('   프로젝트 확인 중 예외:', error.message);
+    hasError = true;
 }
 
-/**
- * 상점별 리뷰 경로
- * stores/{storeId}/reviews
- */
-export function getReviewsPath(storeId: string): string {
-  return `stores/${storeId}/reviews`;
+// 3. 빌드 확인
+process.stdout.write('3️⃣  빌드 결과물 확인... ');
+try {
+    const buildDir = join(__dirname, '..', BUILD_DIR_NAME);
+    if (!fs.existsSync(buildDir)) {
+        console.log('❌');
+        console.error(`   ⛔ '${BUILD_DIR_NAME}' 폴더가 없습니다.`);
+        console.error('   -> 해결: 먼저 빌드를 실행하세요 (npm run build)');
+        // 빌드 없는 배포는 치명적이지 않을 수 있지만(Functions만 배포할 때 등), 
+        // 통상적으로 Hosting 배포 시 필수이므로 Error로 처리합니다.
+        hasError = true;
+    } else {
+        console.log('✅');
+    }
+} catch (error) {
+    console.warn('⚠️  빌드 확인 중 오류 (무시 가능)', error.message);
 }
 
-/**
- * 상점별 공지사항 경로
- * stores/{storeId}/notices
- */
-export function getNoticesPath(storeId: string): string {
-  return `stores/${storeId}/notices`;
-}
+console.log('');
 
-/**
- * 상점별 이벤트 경로
- * stores/{storeId}/events
- */
-export function getEventsPath(storeId: string): string {
-  return `stores/${storeId}/events`;
-}
-
-/**
- * 상점별 사용 쿠폰 경로
- * stores/{storeId}/couponUsages
- */
-export function getCouponUsagesPath(storeId: string): string {
-  return `stores/${storeId}/couponUsages`;
-}
-
-/**
- * 모든 경로를 한 번에 가져오기
- */
-export function getStorePaths(storeId: string) {
-  return {
-    menus: getMenusPath(storeId),
-    orders: getOrdersPath(storeId),
-    coupons: getCouponsPath(storeId),
-    reviews: getReviewsPath(storeId),
-    notices: getNoticesPath(storeId),
-    events: getEventsPath(storeId),
-    couponUsages: getCouponUsagesPath(storeId),
-  };
+// 결과 처리
+if (hasError) {
+    console.error('🚫 [BLOCK] 배포가 중단되었습니다. 위 에러를 수정한 후 다시 시도하세요.');
+    process.exit(1);
+} else {
+    console.log('✨ 모든 체크 포인트를 통과했습니다. 배포를 시작합니다! 🚀\n');
+    process.exit(0);
 }
 
 ```
 
 ---
 
-## File: src\lib\storeAccess.ts
+## File: src\components\common\AddressSearchInput.tsx
 
 ```typescript
-/**
- * 상점 접근 권한 관리 유틸리티
- * adminStores 컬렉션을 통해 관리자-상점 매핑 관리
- */
+import { useState } from 'react';
+import { Search } from 'lucide-react';
+import Input from './Input';
+import Button from './Button';
+import AddressSearchModal from './AddressSearchModal';
 
-import { db } from './firebase';
-import { collection, query, where, getDocs, addDoc, deleteDoc, doc } from 'firebase/firestore';
-import { AdminStore, StorePermission } from '../types/store';
+interface AddressSearchInputProps {
+    label?: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    required?: boolean;
+    className?: string; // Wrapper className
+    inputClassName?: string;
+}
 
-/**
- * 관리자가 접근 가능한 상점 목록 조회
- */
-export async function getAdminStores(adminUid: string): Promise<AdminStore[]> {
-  // adminUid 유효성 검사
-  if (!adminUid || typeof adminUid !== 'string') {
-    console.warn('getAdminStores called with invalid adminUid:', adminUid);
-    return [];
-  }
+export default function AddressSearchInput({
+    label,
+    value,
+    onChange,
+    placeholder = '주소를 검색해주세요',
+    required,
+    className,
+    inputClassName
+}: AddressSearchInputProps) {
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  try {
-    const q = query(
-      collection(db, 'adminStores'),
-      where('adminUid', '==', adminUid)
+    return (
+        <div className={`relative ${className || ''}`}>
+            <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                    <Input
+                        label={label}
+                        value={value}
+                        readOnly
+                        onClick={() => setIsSearchOpen(true)}
+                        placeholder={placeholder}
+                        required={required}
+                        className={`cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors ${inputClassName || ''}`}
+                    />
+                </div>
+                <div className={label ? 'mb-[2px]' : ''}> {/* Align with input box if label exists */}
+                    <Button
+                        type="button"
+                        onClick={() => setIsSearchOpen(true)}
+                        variant="outline"
+                        className="whitespace-nowrap h-[42px]"
+                    >
+                        <Search className="w-4 h-4 mr-1" />
+                        검색
+                    </Button>
+                </div>
+            </div>
+
+            {isSearchOpen && (
+                <AddressSearchModal
+                    onClose={() => setIsSearchOpen(false)}
+                    onComplete={(address) => {
+                        onChange(address);
+                    }}
+                />
+            )}
+        </div>
     );
-    
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as AdminStore[];
-  } catch (error) {
-    console.error('Error in getAdminStores:', error);
-    return [];
-  }
 }
 
-/**
- * 특정 상점의 관리자 목록 조회
- */
-export async function getStoreAdmins(storeId: string): Promise<AdminStore[]> {
-  const q = query(
-    collection(db, 'adminStores'),
-    where('storeId', '==', storeId)
-  );
-  
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data(),
-  })) as AdminStore[];
-}
-
-/**
- * 관리자가 특정 상점에 접근 가능한지 확인
- */
-export async function hasStoreAccess(
-  adminUid: string,
-  storeId: string
-): Promise<boolean> {
-  const adminStores = await getAdminStores(adminUid);
-  return adminStores.some(as => as.storeId === storeId);
-}
-
-/**
- * 관리자가 특정 권한을 가지고 있는지 확인
- */
-export async function hasPermission(
-  adminUid: string,
-  storeId: string,
-  permission: StorePermission
-): Promise<boolean> {
-  const adminStores = await getAdminStores(adminUid);
-  const adminStore = adminStores.find(as => as.storeId === storeId);
-  
-  if (!adminStore) return false;
-  
-  // owner는 모든 권한 보유
-  if (adminStore.role === 'owner') return true;
-  
-  return adminStore.permissions.includes(permission);
-}
-
-/**
- * 관리자를 상점에 추가
- */
-export async function addAdminToStore(
-  adminUid: string,
-  storeId: string,
-  role: 'owner' | 'manager' | 'staff',
-  permissions: StorePermission[]
-): Promise<string> {
-  const adminStoreData = {
-    adminUid,
-    storeId,
-    role,
-    permissions,
-    createdAt: new Date(),
-  };
-  
-  const docRef = await addDoc(collection(db, 'adminStores'), adminStoreData);
-  return docRef.id;
-}
-
-/**
- * 상점에서 관리자 제거
- */
-export async function removeAdminFromStore(adminStoreId: string): Promise<void> {
-  await deleteDoc(doc(db, 'adminStores', adminStoreId));
-}
-
-/**
- * 기본 권한 세트
- */
-export const DEFAULT_PERMISSIONS: Record<string, StorePermission[]> = {
-  owner: [
-    'manage_menus',
-    'manage_orders',
-    'manage_coupons',
-    'manage_reviews',
-    'manage_notices',
-    'manage_events',
-    'manage_store_settings',
-    'view_analytics',
-  ],
-  manager: [
-    'manage_menus',
-    'manage_orders',
-    'manage_coupons',
-    'manage_reviews',
-    'view_analytics',
-  ],
-  staff: [
-    'manage_orders',
-    'view_analytics',
-  ],
-};
 ```
 
 ---
 
-## File: src\pages\admin\AdminDashboard.tsx
+## File: src\components\common\Button.tsx
 
 ```typescript
-import { Package, DollarSign, Clock, CheckCircle2 } from 'lucide-react';
+import React, { ButtonHTMLAttributes, ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
+
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
+  size?: 'sm' | 'md' | 'lg';
+  isLoading?: boolean;
+  fullWidth?: boolean;
+  children?: ReactNode;
+}
+
+export default function Button({
+  variant = 'primary',
+  size = 'md',
+  isLoading = false,
+  fullWidth = false,
+  className = '',
+  children,
+  disabled,
+  ...props
+}: ButtonProps) {
+  const baseClasses = 'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed';
+
+  const variantClasses = {
+    primary: 'gradient-primary text-white hover:shadow-lg hover:scale-[1.02] focus:ring-primary-500',
+    secondary: 'gradient-secondary text-white hover:shadow-lg hover:scale-[1.02] focus:ring-orange-500',
+    outline: 'border-2 border-primary-500 text-primary-600 hover:bg-primary-50 focus:ring-primary-500',
+    ghost: 'text-gray-700 hover:bg-gray-100 focus:ring-gray-500',
+    danger: 'bg-red-500 text-white hover:bg-red-600 hover:shadow-lg focus:ring-red-500',
+  };
+
+  const sizeClasses = {
+    sm: 'px-3 py-1.5 text-sm',
+    md: 'px-5 py-2.5 text-base',
+    lg: 'px-6 py-3 text-lg',
+  };
+
+  const widthClass = fullWidth ? 'w-full' : '';
+
+  return (
+    <button
+      className={`${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${widthClass} ${className}`}
+      disabled={disabled || isLoading}
+      {...props}
+    >
+      {isLoading ? (
+        <>
+          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          처리중...
+        </>
+      ) : (
+        children
+      )}
+    </button>
+  );
+}
+
+```
+
+---
+
+## File: src\components\event\EventList.tsx
+
+```typescript
+import { useState } from 'react';
+import { Calendar, ChevronRight } from 'lucide-react';
+import { Event } from '../../types/event';
+import { formatDate } from '../../utils/formatDate';
+import Card from '../common/Card';
+import Badge from '../common/Badge';
 import { useStore } from '../../contexts/StoreContext';
 import { useFirestoreCollection } from '../../hooks/useFirestoreCollection';
-import { getAllOrdersQuery } from '../../services/orderService';
-import { getAllMenusQuery } from '../../services/menuService';
-import { Order, ORDER_STATUS_LABELS } from '../../types/order';
-import { Menu } from '../../types/menu';
+import { getActiveEventsQuery } from '../../services/eventService';
 
-import AdminSidebar from '../../components/admin/AdminSidebar';
-import Card from '../../components/common/Card';
-import Badge from '../../components/common/Badge';
-
-export default function AdminDashboard() {
-  const { store } = useStore();
-
-  const { data: orders, loading: ordersLoading } = useFirestoreCollection<Order>(
-    store?.id ? getAllOrdersQuery(store.id) : null
-  );
-
-  const { data: menus, loading: menusLoading } = useFirestoreCollection<Menu>(
-    store?.id ? getAllMenusQuery(store.id) : null
-  );
-
-  const isLoading = ordersLoading || menusLoading;
-
-  // Calculate statistics based on real data
-  const totalOrders = orders?.length || 0;
-  const activeOrders = orders?.filter(o => ['접수', '조리중', '배달중'].includes(o.status)).length || 0;
-  const completedOrders = orders?.filter(o => o.status === '완료').length || 0;
-  const cancelledOrders = orders?.filter(o => o.status === '취소').length || 0;
-
-  const totalRevenue = orders
-    ?.filter(o => o.status === '완료')
-    .reduce((sum, o) => sum + o.totalPrice, 0) || 0;
-
-  const todayOrders = orders?.filter(o => {
-    const today = new Date();
-    const orderDate = new Date(o.createdAt);
-    return orderDate.toDateString() === today.toDateString();
-  }).length || 0;
-
-  const stats = [
-    {
-      label: '오늘 주문',
-      value: todayOrders,
-      icon: <Package className="w-6 h-6" />,
-      color: 'blue',
-      suffix: '건',
-    },
-    {
-      label: '총 매출',
-      value: totalRevenue.toLocaleString(),
-      icon: <DollarSign className="w-6 h-6" />,
-      color: 'green',
-      suffix: '원',
-    },
-    {
-      label: '진행중 주문',
-      value: activeOrders,
-      icon: <Clock className="w-6 h-6" />,
-      color: 'orange',
-      suffix: '건',
-    },
-    {
-      label: '완료 주문',
-      value: completedOrders,
-      icon: <CheckCircle2 className="w-6 h-6" />,
-      color: 'purple',
-      suffix: '건',
-    },
-  ];
-
-  const recentOrders = orders?.slice(0, 5) || [];
-  const registeredMenusCount = menus?.length || 0;
-  const soldoutMenusCount = menus?.filter(m => m.soldout).length || 0;
-
-  // Calculate average order value (avoid division by zero)
-  const avgOrderValue = completedOrders > 0
-    ? Math.round(totalRevenue / completedOrders)
-    : 0;
-
-  // Calculate cancellation rate
-  const cancelRate = totalOrders > 0
-    ? ((cancelledOrders / totalOrders) * 100).toFixed(1)
-    : '0';
-
-  if (!store && !isLoading) {
-    return (
-      <div className="flex min-h-screen bg-gray-50">
-        <AdminSidebar />
-        <main className="flex-1 p-8 flex items-center justify-center">
-          <p className="text-gray-500">상점 정보를 불러오는 중...</p>
-        </main>
-      </div>
+export default function EventList() {
+    const { store } = useStore();
+    const storeId = store?.id;
+    const { data: events, loading } = useFirestoreCollection<Event>(
+        storeId ? getActiveEventsQuery(storeId) : null
     );
+
+    if (!storeId) return null;
+
+    if (loading) {
+        return (
+            <div className="text-center py-8">
+                <p className="text-gray-600">이벤트를 불러오는 중...</p>
+            </div>
+        );
+    }
+
+    if (!events || events.length === 0) {
+        return (
+            <div className="text-center py-16">
+                <div className="text-5xl mb-4">🎉</div>
+                <p className="text-gray-600">현재 진행 중인 이벤트가 없습니다</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-4">
+            {events.map((event) => (
+                <Card key={event.id} className="overflow-hidden p-0">
+                    {event.imageUrl && (
+                        <div className="relative h-48 w-full">
+                            <img
+                                src={event.imageUrl}
+                                alt={event.title}
+                                className="w-full h-full object-cover"
+                            />
+                            {event.active && (
+                                <div className="absolute top-2 right-2">
+                                    <Badge variant="success" size="sm">진행중</Badge>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <div className="p-4">
+                        <h3 className="text-lg font-bold text-gray-900 mb-2">{event.title}</h3>
+
+                        <div className="flex items-center text-sm text-gray-500 mb-4">
+                            <Calendar className="w-4 h-4 mr-1.5" />
+                            <span>
+                                {formatDate(event.startDate)} ~ {formatDate(event.endDate)}
+                            </span>
+                        </div>
+
+                        {event.link && (
+                            <a
+                                href={event.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center text-blue-600 hover:text-blue-700 font-medium text-sm"
+                            >
+                                자세히 보기 <ChevronRight className="w-4 h-4 ml-0.5" />
+                            </a>
+                        )}
+                    </div>
+                </Card>
+            ))}
+        </div>
+    );
+}
+
+```
+
+---
+
+## File: src\components\menu\MenuDetailModal.tsx
+
+```typescript
+import { useState } from 'react';
+import { X, Plus, Minus, ShoppingCart } from 'lucide-react';
+import { Menu, MenuOption } from '../../types/menu';
+import { useCart } from '../../contexts/CartContext';
+import { toast } from 'sonner';
+import Button from '../common/Button';
+import Badge from '../common/Badge';
+
+interface MenuDetailModalProps {
+  menu: Menu;
+  onClose: () => void;
+}
+
+export default function MenuDetailModal({ menu, onClose }: MenuDetailModalProps) {
+  // ATOM-122: 숨김 메뉴 접근 차단
+  if (menu.isHidden) {
+    onClose();
+    return null;
   }
 
-  return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AdminSidebar />
+  const { addItem } = useCart();
+  const [quantity, setQuantity] = useState(1);
+  const [selectedOptions, setSelectedOptions] = useState<MenuOption[]>([]);
 
-      <main className="flex-1 p-4 md:p-8">
-        <div className="max-w-7xl mx-auto">
-          {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-3xl mb-2">
-              <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
-                대시보드
+  const toggleOption = (option: MenuOption) => {
+    setSelectedOptions(prev => {
+      const exists = prev.find(opt => opt.id === option.id);
+      if (exists) {
+        return prev.filter(opt => opt.id !== option.id);
+      } else {
+        return [...prev, { ...option, quantity: 1 }];
+      }
+    });
+  };
+
+  const updateOptionQuantity = (optionId: string, delta: number) => {
+    setSelectedOptions(prev => {
+      return prev.map(opt => {
+        if (opt.id === optionId) {
+          const newQuantity = (opt.quantity || 1) + delta;
+          if (newQuantity < 1) return opt; // Minimum 1
+          return { ...opt, quantity: newQuantity };
+        }
+        return opt;
+      });
+    });
+  };
+
+  const getTotalPrice = () => {
+    const optionsPrice = selectedOptions.reduce((sum, opt) => sum + (opt.price * (opt.quantity || 1)), 0);
+    return (menu.price + optionsPrice) * quantity;
+  };
+
+  const handleAddToCart = () => {
+    if (menu.soldout) {
+      toast.error('품절된 메뉴입니다');
+      return;
+    }
+
+    addItem({
+      menuId: menu.id,
+      name: menu.name,
+      price: menu.price,
+      quantity,
+      options: selectedOptions,
+      imageUrl: menu.imageUrl,
+    });
+
+    toast.success(`${menu.name}을(를) 장바구니에 담았습니다`);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 animate-fade-in">
+      <div
+        className="relative w-full max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl max-h-[90vh] overflow-hidden animate-slide-up"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center bg-white/90 backdrop-blur-sm rounded-full shadow-lg hover:bg-white transition-colors"
+        >
+          <X className="w-5 h-5 text-gray-600" />
+        </button>
+
+        <div className="overflow-y-auto max-h-[90vh]">
+          {/* Image */}
+          <div className="relative aspect-[16/9] bg-gray-100">
+            {menu.imageUrl ? (
+              <img
+                src={menu.imageUrl}
+                alt={menu.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-gray-400">
+                <span className="text-8xl">🍜</span>
+              </div>
+            )}
+
+            {menu.soldout && (
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                <Badge variant="danger" size="lg">
+                  품절
+                </Badge>
+              </div>
+            )}
+          </div>
+
+          {/* Content */}
+          <div className="p-6">
+            {/* Header */}
+            <div className="mb-4">
+              <div className="flex flex-wrap gap-2 mb-2">
+                {menu.category.map((cat) => (
+                  <Badge key={cat} variant="primary">
+                    {cat}
+                  </Badge>
+                ))}
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">{menu.name}</h2>
+              <p className="text-gray-600">{menu.description}</p>
+            </div>
+
+            {/* Price */}
+            <div className="mb-6 pb-6 border-b border-gray-200">
+              <span className="text-3xl font-bold text-blue-600">
+                {menu.price.toLocaleString()}
               </span>
-            </h1>
-            <p className="text-gray-600">매장 현황을 한눈에 확인하세요</p>
-          </div>
+              <span className="text-lg text-gray-600 ml-2">원</span>
+            </div>
 
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            {stats.map((stat, idx) => (
-              <StatCard key={idx} {...stat} loading={isLoading} />
-            ))}
-          </div>
-
-          <div className="grid lg:grid-cols-3 gap-6">
-            {/* Recent Orders */}
-            <Card className="lg:col-span-2">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-gray-900">최근 주문</h2>
-                <Badge variant="primary">{totalOrders}건</Badge>
-              </div>
-
-              {isLoading ? (
-                <div className="py-8 text-center text-gray-500">로딩 중...</div>
-              ) : recentOrders.length > 0 ? (
-                <div className="space-y-3">
-                  {recentOrders.map((order) => (
-                    <div
-                      key={order.id}
-                      className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="flex-1">
-                        <p className="font-medium text-gray-900 mb-1">주문 #{order.id.slice(0, 8)}</p>
-                        <p className="text-sm text-gray-600">
-                          {order.items.length}개 상품 · {order.totalPrice.toLocaleString()}원
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {new Date(order.createdAt).toLocaleString('ko-KR')}
-                        </p>
-                      </div>
-                      <Badge
-                        variant={
-                          order.status === '완료' ? 'success' :
-                            order.status === '취소' ? 'danger' :
-                              order.status === '배달중' ? 'secondary' :
-                                'primary'
-                        }
+            {/* Options */}
+            {menu.options && menu.options.length > 0 && (
+              <div className="mb-6 pb-6 border-b border-gray-200">
+                <h3 className="font-semibold text-gray-900 mb-3">옵션 선택</h3>
+                <div className="space-y-2">
+                  {menu.options.map((option) => {
+                    const selected = selectedOptions.find(opt => opt.id === option.id);
+                    return (
+                      <div
+                        key={option.id}
+                        className={`
+                          w-full rounded-lg border-2 transition-all overflow-hidden
+                          ${selected
+                            ? 'border-blue-500 bg-white'
+                            : 'border-gray-200 hover:border-gray-300'
+                          }
+                        `}
                       >
-                        {ORDER_STATUS_LABELS[order.status]}
-                      </Badge>
-                    </div>
-                  ))}
+                        <button
+                          onClick={() => toggleOption(option)}
+                          className="w-full flex items-center justify-between p-4 text-left"
+                        >
+                          <span className="font-medium text-gray-900">{option.name}</span>
+                          <span className={`${selected ? 'text-blue-600' : 'text-gray-900'} font-semibold`}>
+                            +{option.price.toLocaleString()}원
+                          </span>
+                        </button>
+
+                        {selected && option.quantity !== undefined && (
+                          <div className="flex items-center justify-between bg-blue-50 p-3 border-t border-blue-100 animate-slide-down">
+                            <span className="text-sm text-blue-800 font-medium ml-1">수량</span>
+                            <div className="flex items-center bg-white rounded-lg border border-blue-200 shadow-sm">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateOptionQuantity(option.id, -1);
+                                }}
+                                className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-blue-600 hover:bg-gray-50 rounded-l-lg transition-colors"
+                              >
+                                <Minus className="w-4 h-4" />
+                              </button>
+                              <span className="w-8 text-center text-sm font-bold text-gray-900">
+                                {selected.quantity || 1}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateOptionQuantity(option.id, 1);
+                                }}
+                                className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-blue-600 hover:bg-gray-50 rounded-r-lg transition-colors"
+                              >
+                                <Plus className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : (
-                <div className="py-8 text-center text-gray-500">최근 주문 내역이 없습니다.</div>
-              )}
-            </Card>
-
-            {/* Quick Stats */}
-            <Card>
-              <h2 className="text-xl font-bold text-gray-900 mb-6">빠른 통계</h2>
-              <div className="space-y-4">
-                <QuickStat
-                  label="등록된 메뉴"
-                  value={isLoading ? '-' : registeredMenusCount}
-                  suffix="개"
-                  color="blue"
-                />
-                <QuickStat
-                  label="품절 메뉴"
-                  value={isLoading ? '-' : soldoutMenusCount}
-                  suffix="개"
-                  color="red"
-                />
-                <QuickStat
-                  label="평균 주문 금액"
-                  value={isLoading ? '-' : avgOrderValue.toLocaleString()}
-                  suffix="원"
-                  color="green"
-                />
-                <QuickStat
-                  label="취소율"
-                  value={isLoading ? '-' : cancelRate}
-                  suffix="%"
-                  color="orange"
-                />
               </div>
-            </Card>
+            )}
+
+            {/* Quantity */}
+            <div className="mb-6">
+              <h3 className="font-semibold text-gray-900 mb-3">수량</h3>
+              <div className="flex items-center space-x-4">
+                <button
+                  onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                  className="w-10 h-10 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:text-blue-600 transition-colors"
+                >
+                  <Minus className="w-5 h-5" />
+                </button>
+                <span className="text-2xl font-bold text-gray-900 min-w-[3rem] text-center">
+                  {quantity}
+                </span>
+                <button
+                  onClick={() => setQuantity(quantity + 1)}
+                  className="w-10 h-10 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:text-blue-600 transition-colors"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Total & Add to Cart */}
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <p className="text-sm text-gray-600 mb-1">총 금액</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {getTotalPrice().toLocaleString()}원
+                </p>
+              </div>
+              <Button
+                size="lg"
+                onClick={handleAddToCart}
+                disabled={menu.soldout}
+                className="flex-1"
+              >
+                <ShoppingCart className="w-5 h-5 mr-2" />
+                장바구니 담기
+              </Button>
+            </div>
           </div>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-import { StatCardProps, QuickStatProps } from '../../types/dashboard';
-
-// ... (existing imports)
-
-// ... (existing AdminDashboard component)
-
-function StatCard({ label, value, icon, color, suffix, loading }: StatCardProps) {
-  const colorClasses = {
-    blue: 'bg-blue-500',
-    green: 'bg-green-500',
-    orange: 'bg-orange-500',
-    purple: 'bg-purple-500',
-  }[color];
-
-  return (
-    <Card className="relative overflow-hidden">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm text-gray-600 mb-2">{label}</p>
-          <p className="text-3xl font-bold text-gray-900">
-            {loading ? '-' : value}
-            {!loading && suffix && <span className="text-lg text-gray-600 ml-1">{suffix}</span>}
-          </p>
-        </div>
-        <div className={`w-12 h-12 ${colorClasses} rounded-xl flex items-center justify-center text-white`}>
-          {icon}
         </div>
       </div>
-      <div className={`absolute bottom-0 left-0 right-0 h-1 ${colorClasses}`} />
-    </Card>
+    </div>
+  );
+}
+```
+
+---
+
+## File: src\components\notice\NoticePopup.tsx
+
+```typescript
+import { useState, useEffect } from 'react';
+import { X, Pin } from 'lucide-react';
+import { Notice } from '../../types/notice';
+import { useStore } from '../../contexts/StoreContext';
+import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { getNoticesPath } from '../../lib/firestorePaths';
+import Card from '../common/Card';
+import Button from '../common/Button';
+import Badge from '../common/Badge';
+
+export default function NoticePopup() {
+  const { store } = useStore();
+  const storeId = store?.id;
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (!storeId) return;
+
+    const loadPinnedNotice = async () => {
+      try {
+        // 고정된 공지 중 가장 최근 것 하나만 가져오기
+        const q = query(
+          collection(db, getNoticesPath(storeId)),
+          where('pinned', '==', true),
+          orderBy('createdAt', 'desc'),
+          limit(1)
+        );
+
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+          return;
+        }
+
+        const noticeDoc = snapshot.docs[0];
+        const noticeData = {
+          id: noticeDoc.id,
+          ...noticeDoc.data(),
+        } as Notice;
+
+        // localStorage 체크: 오늘 본 공지인지 확인
+        const today = new Date().toISOString().split('T')[0];
+        const storageKey = `notice_popup_${noticeData.id}_${today}`;
+        const hasSeenToday = localStorage.getItem(storageKey);
+
+        if (!hasSeenToday) {
+          setNotice(noticeData);
+          setShow(true);
+        }
+      } catch (error) {
+        console.error('공지사항 팝업 로드 실패:', error);
+      }
+    };
+
+    loadPinnedNotice();
+  }, [storeId]);
+
+  const handleClose = (dontShowToday: boolean = false) => {
+    if (dontShowToday && notice) {
+      const today = new Date().toISOString().split('T')[0];
+      const storageKey = `notice_popup_${notice.id}_${today}`;
+      localStorage.setItem(storageKey, 'true');
+    }
+    setShow(false);
+  };
+
+  if (!show || !notice) {
+    return null;
+  }
+
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case '공지': return 'primary';
+      case '이벤트': return 'secondary';
+      case '점검': return 'danger';
+      case '할인': return 'success';
+      default: return 'gray';
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
+      <div className="relative w-full max-w-lg">
+        <Card className="relative">
+          {/* Close Button */}
+          <button
+            onClick={() => handleClose(false)}
+            className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-600" />
+          </button>
+
+          {/* Header */}
+          <div className="mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Pin className="w-5 h-5 text-blue-600" />
+              <Badge variant={getCategoryColor(notice.category)}>
+                {notice.category}
+              </Badge>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 pr-8">
+              {notice.title}
+            </h2>
+          </div>
+
+          {/* Content */}
+          <div className="mb-6">
+            <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">
+              {notice.content}
+            </p>
+          </div>
+
+          {/* Footer */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              variant="outline"
+              fullWidth
+              onClick={() => handleClose(true)}
+            >
+              오늘 하루 보지 않기
+            </Button>
+            <Button
+              fullWidth
+              onClick={() => handleClose(false)}
+            >
+              확인
+            </Button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## File: src\components\ui\input.tsx
+
+```typescript
+import * as React from "react";
+
+import { cn } from "./utils";
+
+function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+  return (
+    <input
+      type={type}
+      data-slot="input"
+      className={cn(
+        "file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base bg-input-background transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+        "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+        "aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
-function QuickStat({ label, value, suffix, color }: QuickStatProps) {
-  const colorClasses = {
-    blue: 'text-blue-600',
-    green: 'text-green-600',
-    red: 'text-red-600',
-    orange: 'text-orange-600',
-    purple: 'text-purple-600',
-  }[color];
+export { Input };
+
+```
+
+---
+
+## File: src\components\ui\radio-group.tsx
+
+```typescript
+"use client";
+
+import * as React from "react";
+import * as RadioGroupPrimitive from "@radix-ui/react-radio-group@1.2.3";
+import { CircleIcon } from "lucide-react@0.487.0";
+
+import { cn } from "./utils";
+
+function RadioGroup({
+  className,
+  ...props
+}: React.ComponentProps<typeof RadioGroupPrimitive.Root>) {
+  return (
+    <RadioGroupPrimitive.Root
+      data-slot="radio-group"
+      className={cn("grid gap-3", className)}
+      {...props}
+    />
+  );
+}
+
+function RadioGroupItem({
+  className,
+  ...props
+}: React.ComponentProps<typeof RadioGroupPrimitive.Item>) {
+  return (
+    <RadioGroupPrimitive.Item
+      data-slot="radio-group-item"
+      className={cn(
+        "border-input text-primary focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 aspect-square size-4 shrink-0 rounded-full border shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    >
+      <RadioGroupPrimitive.Indicator
+        data-slot="radio-group-indicator"
+        className="relative flex items-center justify-center"
+      >
+        <CircleIcon className="fill-primary absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2" />
+      </RadioGroupPrimitive.Indicator>
+    </RadioGroupPrimitive.Item>
+  );
+}
+
+export { RadioGroup, RadioGroupItem };
+
+```
+
+---
+
+## File: src\components\ui\slider.tsx
+
+```typescript
+"use client";
+
+import * as React from "react";
+import * as SliderPrimitive from "@radix-ui/react-slider@1.2.3";
+
+import { cn } from "./utils";
+
+function Slider({
+  className,
+  defaultValue,
+  value,
+  min = 0,
+  max = 100,
+  ...props
+}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+  const _values = React.useMemo(
+    () =>
+      Array.isArray(value)
+        ? value
+        : Array.isArray(defaultValue)
+          ? defaultValue
+          : [min, max],
+    [value, defaultValue, min, max],
+  );
 
   return (
-    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-      <span className="text-sm text-gray-700">{label}</span>
-      <span className={`font-bold ${colorClasses}`}>
-        {value}{suffix}
-      </span>
-    </div>
+    <SliderPrimitive.Root
+      data-slot="slider"
+      defaultValue={defaultValue}
+      value={value}
+      min={min}
+      max={max}
+      className={cn(
+        "relative flex w-full touch-none items-center select-none data-[disabled]:opacity-50 data-[orientation=vertical]:h-full data-[orientation=vertical]:min-h-44 data-[orientation=vertical]:w-auto data-[orientation=vertical]:flex-col",
+        className,
+      )}
+      {...props}
+    >
+      <SliderPrimitive.Track
+        data-slot="slider-track"
+        className={cn(
+          "bg-muted relative grow overflow-hidden rounded-full data-[orientation=horizontal]:h-4 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5",
+        )}
+      >
+        <SliderPrimitive.Range
+          data-slot="slider-range"
+          className={cn(
+            "bg-primary absolute data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full",
+          )}
+        />
+      </SliderPrimitive.Track>
+      {Array.from({ length: _values.length }, (_, index) => (
+        <SliderPrimitive.Thumb
+          data-slot="slider-thumb"
+          key={index}
+          className="border-primary bg-background ring-ring/50 block size-4 shrink-0 rounded-full border shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
+        />
+      ))}
+    </SliderPrimitive.Root>
   );
+}
+
+export { Slider };
+
+```
+
+---
+
+## File: src\contexts\CartContext.tsx
+
+```typescript
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { MenuOption } from '../types/menu';
+
+export interface CartItem {
+  id: string;
+  menuId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  options?: MenuOption[];
+  imageUrl?: string;
+}
+
+interface CartContextType {
+  items: CartItem[];
+  addItem: (item: Omit<CartItem, 'id'>) => void;
+  removeItem: (id: string) => void;
+  updateQuantity: (id: string, quantity: number) => void;
+  clearCart: () => void;
+  getTotalPrice: () => number;
+  getTotalItems: () => number;
+}
+
+const CartContext = createContext<CartContextType | undefined>(undefined);
+
+export function CartProvider({ children }: { children: ReactNode }) {
+  const [items, setItems] = useState<CartItem[]>([]);
+
+  // Load cart from localStorage on mount
+  useEffect(() => {
+    const storedCart = localStorage.getItem('cart');
+    if (storedCart) {
+      setItems(JSON.parse(storedCart));
+    }
+  }, []);
+
+  // Save cart to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('cart', JSON.stringify(items));
+  }, [items]);
+
+  const addItem = (item: Omit<CartItem, 'id'>) => {
+    const id = 'cart-' + Date.now() + '-' + Math.random();
+    setItems(prev => [...prev, { ...item, id }]);
+  };
+
+  const removeItem = (id: string) => {
+    setItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  const updateQuantity = (id: string, quantity: number) => {
+    if (quantity <= 0) {
+      removeItem(id);
+      return;
+    }
+    setItems(prev =>
+      prev.map(item => (item.id === id ? { ...item, quantity } : item))
+    );
+  };
+
+  const clearCart = () => {
+    setItems([]);
+  };
+
+  const getTotalPrice = () => {
+    return items.reduce((total, item) => {
+      const optionsPrice = item.options?.reduce((sum, opt) => sum + (opt.price * (opt.quantity || 1)), 0) || 0;
+      return total + (item.price + optionsPrice) * item.quantity;
+    }, 0);
+  };
+
+  const getTotalItems = () => {
+    return items.reduce((total, item) => total + item.quantity, 0);
+  };
+
+  return (
+    <CartContext.Provider
+      value={{
+        items,
+        addItem,
+        removeItem,
+        updateQuantity,
+        clearCart,
+        getTotalPrice,
+        getTotalItems,
+      }}
+    >
+      {children}
+    </CartContext.Provider>
+  );
+}
+
+export function useCart() {
+  const context = useContext(CartContext);
+  if (context === undefined) {
+    throw new Error('useCart must be used within a CartProvider');
+  }
+  return context;
 }
 ```
 
@@ -1657,6 +1695,44 @@ function EventFormModal({ event, onSave, onClose }: EventFormModalProps) {
 
 ---
 
+## File: src\pages\EventsPage.tsx
+
+```typescript
+import { Gift } from 'lucide-react';
+import EventList from '../components/event/EventList';
+
+export default function EventsPage() {
+    return (
+        <div className="min-h-screen bg-gray-50 py-8">
+            <div className="container mx-auto px-4 max-w-4xl">
+                {/* Header */}
+                <div className="mb-8">
+                    <div className="flex items-center gap-3 mb-2">
+                        <div className="w-12 h-12 gradient-primary rounded-2xl flex items-center justify-center">
+                            <Gift className="w-6 h-6 text-white" />
+                        </div>
+                        <h1 className="text-3xl">
+                            <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
+                                이벤트
+                            </span>
+                        </h1>
+                    </div>
+                    <p className="text-gray-600">
+                        놓치지 마세요! 현재 진행 중인 다양한 혜택
+                    </p>
+                </div>
+
+                {/* Event List */}
+                <EventList />
+            </div>
+        </div>
+    );
+}
+
+```
+
+---
+
 ## File: src\pages\MyPage.tsx
 
 ```typescript
@@ -1954,44 +2030,162 @@ export default function MyPage() {
 
 ---
 
-## File: src\pages\NoticePage.tsx
+## File: src\pages\NicepayReturnPage.tsx
 
 ```typescript
-import { Bell } from 'lucide-react';
-import NoticeList from '../components/notice/NoticeList';
+/// <reference types="vite/client" />
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import Card from '../components/common/Card';
+import Button from '../components/common/Button';
+import { useStore } from '../contexts/StoreContext';
 
-export default function NoticePage() {
-  return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="container mx-auto px-4 max-w-4xl">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 gradient-primary rounded-2xl flex items-center justify-center">
-              <Bell className="w-6 h-6 text-white" />
-            </div>
-            <h1 className="text-3xl">
-              <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">
-                공지사항
-              </span>
-            </h1>
-          </div>
-          <p className="text-gray-600">
-            중요한 소식과 이벤트를 확인하세요
-          </p>
-        </div>
+// 개발용 임시 Cloud Functions URL (로컬 또는 프로덕션)
+// 실제 배포 시에는 자동으로 Functions 도메인을 사용하거나 프록시 설정 필요
+const FUNCTIONS_URL = import.meta.env.VITE_FUNCTIONS_URL || 'https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/nicepayConfirm';
 
-        {/* Notice List */}
-        <NoticeList />
-      </div>
-    </div>
-  );
+interface NicepayConfirmResponse {
+    success: boolean;
+    data?: any;
+    error?: string;
+    code?: string;
 }
+
+export default function NicepayReturnPage() {
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const { store } = useStore();
+
+    const [status, setStatus] = useState<'loading' | 'success' | 'failed'>('loading');
+    const [message, setMessage] = useState('결제 결과를 확인하고 있습니다...');
+
+    useEffect(() => {
+        const verifyPayment = async () => {
+            // URL 파라미터 파싱
+            const orderId = searchParams.get('orderId');
+            const tid = searchParams.get('tid') || searchParams.get('TxTid');
+            const authToken = searchParams.get('authToken') || searchParams.get('AuthToken');
+            const resultCode = searchParams.get('resultCode') || searchParams.get('ResultCode');
+            const resultMsg = searchParams.get('resultMsg') || searchParams.get('ResultMsg');
+            const amount = searchParams.get('amt') || searchParams.get('Amt');
+
+            console.log('NICEPAY Return Params:', { orderId, tid, resultCode, resultMsg });
+
+            if (resultCode !== '0000') {
+                setStatus('failed');
+                setMessage(resultMsg || '결제가 취소되었거나 승인되지 않았습니다.');
+                return;
+            }
+
+            if (!orderId || !tid || !authToken) {
+                setStatus('failed');
+                setMessage('필수 결제 정보가 누락되었습니다.');
+                return;
+            }
+
+            try {
+                // Cloud Function 호출
+                // 주의: 배포 전에는 로컬 에뮬레이터나 배포된 URL을 정확히 지정해야 함.
+                // 여기서는 fetch 사용. (T2-4-2 Task에서 URL은 .env 등으로 관리 권장)
+
+                // **************************************************************************
+                // [중요] 실제 운영 환경에서는 Functions URL을 동적으로 주입해야 합니다.
+                // 현재는 예시로 상대 경로 또는 하드코딩된 URL을 사용할 수 있습니다.
+                // **************************************************************************
+
+                const response = await fetch('/nicepayConfirm', { // 리버스 프록시 사용 시
+                    // const response = await fetch('http://127.0.0.1:5001/YOUR_PROJECT/us-central1/nicepayConfirm', { // 로컬 테스트
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tid,
+                        authToken,
+                        orderId,
+                        storeId: store?.id,
+                        amount: Number(amount)
+                    })
+                });
+
+                const result: NicepayConfirmResponse = await response.json();
+
+                if (result.success) {
+                    setStatus('success');
+                    setMessage('결제가 정상적으로 완료되었습니다.');
+                } else {
+                    setStatus('failed');
+                    setMessage(result.error || '결제 승인 중 오류가 발생했습니다.');
+                }
+            } catch (error) {
+                console.error('Payment Confirmation Error:', error);
+                setStatus('failed');
+                setMessage('서버 통신 중 오류가 발생했습니다.');
+            }
+        };
+
+        if (store?.id) {
+            verifyPayment();
+        }
+    }, [searchParams, store]);
+
+    return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+            <Card className="max-w-md w-full text-center py-10 px-6">
+                {status === 'loading' && (
+                    <div className="flex flex-col items-center">
+                        <Loader2 className="w-16 h-16 text-blue-600 animate-spin mb-6" />
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 승인 중...</h2>
+                        <p className="text-gray-600 animate-pulse">{message}</p>
+                    </div>
+                )}
+
+                {status === 'success' && (
+                    <div className="flex flex-col items-center">
+                        <CheckCircle2 className="w-16 h-16 text-green-500 mb-6" />
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 성공!</h2>
+                        <p className="text-gray-600 mb-8">{message}</p>
+                        <Button
+                            fullWidth
+                            size="lg"
+                            onClick={() => navigate('/orders')}
+                        >
+                            주문 내역 보기
+                        </Button>
+                    </div>
+                )}
+
+                {status === 'failed' && (
+                    <div className="flex flex-col items-center">
+                        <XCircle className="w-16 h-16 text-red-500 mb-6" />
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">결제 실패</h2>
+                        <p className="text-gray-600 mb-8">{message}</p>
+                        <div className="flex gap-3 w-full">
+                            <Button
+                                variant="outline"
+                                fullWidth
+                                onClick={() => navigate('/')}
+                            >
+                                홈으로
+                            </Button>
+                            <Button
+                                fullWidth
+                                onClick={() => navigate('/checkout')}
+                            >
+                                다시 시도
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </Card>
+        </div>
+    );
+}
+
 ```
 
 ---
 
-## File: src\services\reviewService.ts
+## File: src\services\noticeService.ts
 
 ```typescript
 import {
@@ -2003,373 +2197,122 @@ import {
   query,
   where,
   orderBy,
-  getDocs,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Review, CreateReviewData, UpdateReviewData } from '../types/review';
+import { Notice, NoticeCategory } from '../types/notice';
 
 // 컬렉션 참조 헬퍼
-const getReviewCollection = (storeId: string) => collection(db, 'stores', storeId, 'reviews');
+const getNoticeCollection = (storeId: string) => collection(db, 'stores', storeId, 'notices');
 
 /**
- * 리뷰 생성
+ * 공지사항 생성
  */
-export async function createReview(
+export async function createNotice(
   storeId: string,
-  reviewData: CreateReviewData
+  noticeData: Omit<Notice, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<string> {
   try {
-    // 1. 리뷰 생성
-    const docRef = await addDoc(getReviewCollection(storeId), {
-      ...reviewData,
+    const docRef = await addDoc(getNoticeCollection(storeId), {
+      ...noticeData,
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
-
-    // 2. 주문 문서에 리뷰 정보 미러링 (stores/{storeId}/orders/{orderId})
-    const orderRef = doc(db, 'stores', storeId, 'orders', reviewData.orderId);
-    await updateDoc(orderRef, {
-      reviewed: true,
-      reviewText: reviewData.comment,
-      reviewRating: reviewData.rating,
-      reviewedAt: serverTimestamp(),
-    });
-
     return docRef.id;
   } catch (error) {
-    console.error('리뷰 생성 실패:', error);
+    console.error('공지사항 생성 실패:', error);
     throw error;
   }
 }
 
 /**
- * 리뷰 수정
+ * 공지사항 수정
  */
-export async function updateReview(
+export async function updateNotice(
   storeId: string,
-  reviewId: string,
-  reviewData: UpdateReviewData
+  noticeId: string,
+  noticeData: Partial<Omit<Notice, 'id' | 'createdAt'>>
 ): Promise<void> {
   try {
-    const reviewRef = doc(db, 'stores', storeId, 'reviews', reviewId);
-    await updateDoc(reviewRef, {
-      ...reviewData,
+    const noticeRef = doc(db, 'stores', storeId, 'notices', noticeId);
+    await updateDoc(noticeRef, {
+      ...noticeData,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
-    console.error('리뷰 수정 실패:', error);
+    console.error('공지사항 수정 실패:', error);
     throw error;
   }
 }
 
 /**
- * 리뷰 삭제
+ * 공지사항 삭제
  */
-export async function deleteReview(
+export async function deleteNotice(
   storeId: string,
-  reviewId: string,
-  orderId: string
+  noticeId: string
 ): Promise<void> {
   try {
-    // 1. 리뷰 삭제
-    const reviewRef = doc(db, 'stores', storeId, 'reviews', reviewId);
-    await deleteDoc(reviewRef);
-
-    // 2. 주문 문서 리뷰 필드 초기화 (주문이 존재할 경우에만)
-    try {
-      const orderRef = doc(db, 'stores', storeId, 'orders', orderId);
-      await updateDoc(orderRef, {
-        reviewed: false,
-        reviewText: null,
-        reviewRating: null,
-        reviewedAt: null,
-      });
-    } catch (updateError: any) {
-      // 주문이 이미 삭제된 경우(No document to update)는 무시
-      if (updateError?.code === 'not-found' || updateError?.message?.includes('No document to update')) {
-        console.warn('주문 문서를 찾을 수 없어 리뷰 상태를 업데이트하지 못했습니다 (주문 삭제됨).', orderId);
-      } else {
-        // 다른 에러는 로깅하되, 리뷰 삭제 자체는 성공했으므로 상위로 전파하지 않음 (선택 사항)
-        // 상황에 따라 판단해야 하지만, 리뷰 삭제가 메인 의도이므로 경고만 남기겠습니다.
-        console.error('주문 문서 업데이트 중 오류 발생:', updateError);
-      }
-    }
+    const noticeRef = doc(db, 'stores', storeId, 'notices', noticeId);
+    await deleteDoc(noticeRef);
   } catch (error) {
-    console.error('리뷰 삭제 실패:', error);
+    console.error('공지사항 삭제 실패:', error);
     throw error;
   }
 }
 
 /**
- * 특정 주문의 리뷰 조회
+ * 공지사항 고정 토글
  */
-export async function getReviewByOrder(
+export async function toggleNoticePinned(
   storeId: string,
-  orderId: string,
-  userId: string
-): Promise<Review | null> {
+  noticeId: string,
+  pinned: boolean
+): Promise<void> {
   try {
-    const q = query(
-      getReviewCollection(storeId),
-      where('orderId', '==', orderId),
-      where('userId', '==', userId)
-    );
-
-    const snapshot = await getDocs(q);
-
-    if (snapshot.empty) {
-      return null;
-    }
-
-    const doc = snapshot.docs[0];
-    return {
-      id: doc.id,
-      ...doc.data(),
-    } as Review;
+    const noticeRef = doc(db, 'stores', storeId, 'notices', noticeId);
+    await updateDoc(noticeRef, {
+      pinned,
+      updatedAt: serverTimestamp(),
+    });
   } catch (error) {
-    console.error('리뷰 조회 실패:', error);
+    console.error('공지사항 고정 상태 변경 실패:', error);
     throw error;
   }
 }
 
 /**
- * 모든 리뷰 쿼리 (최신순)
+ * 모든 공지사항 쿼리 (고정 공지 우선, 최신순)
  */
-export function getAllReviewsQuery(storeId: string) {
+export function getAllNoticesQuery(storeId: string) {
   return query(
-    getReviewCollection(storeId),
+    getNoticeCollection(storeId),
+    orderBy('pinned', 'desc'),
     orderBy('createdAt', 'desc')
   );
 }
 
 /**
- * 특정 평점 이상 리뷰 쿼리
+ * 카테고리별 공지사항 쿼리
  */
-export function getReviewsByRatingQuery(storeId: string, minRating: number) {
+export function getNoticesByCategoryQuery(storeId: string, category: NoticeCategory) {
   return query(
-    getReviewCollection(storeId),
-    where('rating', '>=', minRating),
-    orderBy('rating', 'desc'),
+    getNoticeCollection(storeId),
+    where('category', '==', category),
+    orderBy('pinned', 'desc'),
     orderBy('createdAt', 'desc')
   );
 }
 
-```
-
----
-
-## File: src\services\userService.ts
-
-```typescript
-import { collection, query, where, getDocs, limit, orderBy } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { User } from '../types/user';
-
-// User 타입 정의 (기존 types/user.ts가 없다면 여기에 정의하거나 types 폴더에 추가해야 함)
-// 일단 간단한 인터페이스 사용
-export interface UserProfile {
-    id: string;
-    name: string;
-    phone: string;
-    email: string;
-    createdAt: any;
-}
-
-const COLLECTION_NAME = 'users';
-
-export async function searchUsers(keyword: string): Promise<UserProfile[]> {
-    try {
-        const usersRef = collection(db, COLLECTION_NAME);
-        let q;
-
-        // 전화번호로 검색 (정확히 일치하거나 시작하는 경우)
-        if (/^[0-9-]+$/.test(keyword)) {
-            q = query(
-                usersRef,
-                where('phone', '>=', keyword),
-                where('phone', '<=', keyword + '\uf8ff'),
-                limit(5)
-            );
-        } else {
-            // 이름으로 검색
-            q = query(
-                usersRef,
-                where('displayName', '>=', keyword),
-                where('displayName', '<=', keyword + '\uf8ff'),
-                limit(5)
-            );
-        }
-
-        const snapshot = await getDocs(q);
-        const users: UserProfile[] = [];
-
-        snapshot.forEach((doc) => {
-            const data = doc.data();
-            users.push({
-                id: doc.id,
-                name: data.displayName || data.name || '이름 없음',
-                phone: data.phone || '',
-                email: data.email || '',
-                createdAt: data.createdAt,
-            });
-        });
-
-        return users;
-    } catch (error) {
-        console.error('사용자 검색 실패:', error);
-        return [];
-    }
-}
-
-// 전체 사용자 목록 가져오기 (최근 가입순 20명)
-export async function getRecentUsers(): Promise<UserProfile[]> {
-    try {
-        const q = query(
-            collection(db, COLLECTION_NAME),
-            orderBy('createdAt', 'desc'),
-            limit(20)
-        );
-
-        const snapshot = await getDocs(q);
-        return snapshot.docs.map(doc => ({
-            id: doc.id,
-            name: doc.data().name || '이름 없음',
-            phone: doc.data().phone || '',
-            email: doc.data().email || '',
-            createdAt: doc.data().createdAt,
-        })) as UserProfile[];
-    } catch (error) {
-        console.error('사용자 목록 로드 실패:', error);
-        return [];
-    }
-}
-
-```
-
----
-
-## File: src\types\notice.ts
-
-```typescript
-export interface Notice {
-  id: string;
-  title: string;
-  content: string;
-  category: '공지' | '이벤트' | '점검' | '할인';
-  pinned: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export const NOTICE_CATEGORIES = ['공지', '이벤트', '점검', '할인'] as const;
-export type NoticeCategory = typeof NOTICE_CATEGORIES[number];
-
-```
-
----
-
-## File: src\types\store.ts
-
-```typescript
 /**
- * 상점(Store) 타입 정의
- * 단일 레스토랑 앱을 위한 단순화된 구조
+ * 고정된 공지사항만 조회
  */
-
-export interface Store {
-  id: string; // 단일 문서 ID (예: 'store')
-  name: string;
-  description: string;
-
-  // 연락처 정보
-  phone: string;
-  email: string;
-  address: string;
-
-  // 브랜딩
-  logoUrl?: string;
-  bannerUrl?: string;
-  primaryColor?: string; // 메인 테마 색상
-
-  // 운영 정보
-  businessHours?: BusinessHours;
-  deliveryFee: number;
-  minOrderAmount: number;
-
-  // 설정
-  settings: StoreSettings;
-
-  // 메타데이터
-  createdAt: any; // Firestore Timestamp
-  updatedAt: any; // Firestore Timestamp
-}
-
-export interface BusinessHours {
-  monday?: DayHours;
-  tuesday?: DayHours;
-  wednesday?: DayHours;
-  thursday?: DayHours;
-  friday?: DayHours;
-  saturday?: DayHours;
-  sunday?: DayHours;
-}
-
-export interface DayHours {
-  open: string; // "09:00"
-  close: string; // "22:00"
-  closed: boolean; // 휴무일 여부
-}
-
-export interface StoreSettings {
-  // 주문 설정
-  autoAcceptOrders: boolean; // 자동 주문 접수
-  estimatedDeliveryTime: number; // 예상 배달 시간 (분)
-
-  // 결제 설정
-  paymentMethods: PaymentMethod[];
-
-  // 알림 설정
-  notificationEmail?: string;
-  notificationPhone?: string;
-
-  // 기능 활성화
-  enableReviews: boolean;
-  enableCoupons: boolean;
-  enableNotices: boolean;
-  enableEvents: boolean;
-  // 배달 대행 설정 (v2.0)
-  deliverySettings?: DeliverySettings;
-}
-
-export interface DeliverySettings {
-  provider: 'manual' | 'barogo' | 'vroong' | 'mesh'; // 'manual' = 자체배달
-  apiKey?: string;
-  apiSecret?: string;
-  shopId?: string; // 대행사측 상점 ID
-  webhookUrl?: string; // 대행사 -> 앱 상태 업데이트용 (자동생성/표시용)
-}
-
-export type PaymentMethod = '앱결제' | '만나서카드' | '만나서현금' | '방문시결제';
-
-/**
- * 상점 설정 폼 데이터
- */
-export interface StoreFormData {
-  name: string;
-  description: string;
-  phone: string;
-  email: string;
-  address: string;
-  deliveryFee: number;
-  minOrderAmount: number;
-  logoUrl?: string;
-  bannerUrl?: string;
-  businessHours?: BusinessHours;
-  settings?: StoreSettings;
-}
-
-export interface UpdateStoreFormData extends StoreFormData {
-  primaryColor?: string;
+export function getPinnedNoticesQuery(storeId: string) {
+  return query(
+    getNoticeCollection(storeId),
+    where('pinned', '==', true),
+    orderBy('createdAt', 'desc')
+  );
 }
 
 ```

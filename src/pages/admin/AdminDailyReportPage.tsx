@@ -33,12 +33,14 @@ export default function AdminDailyReportPage() {
         const fetchStats = async () => {
             setLoading(true);
             try {
-                // 어제 날짜 구하기 (KST 기준 단순 계산)
+                // 어제 날짜 구하기 (KST 고정: 클라이언트/브라우저 타임존 무시)
                 const now = new Date();
-                const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-                const yyyy = yesterday.getFullYear();
-                const mm = String(yesterday.getMonth() + 1).padStart(2, '0');
-                const dd = String(yesterday.getDate()).padStart(2, '0');
+                const kstNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+                const kstYesterday = new Date(kstNow.getTime() - 24 * 60 * 60 * 1000);
+
+                const yyyy = kstYesterday.getFullYear();
+                const mm = String(kstYesterday.getMonth() + 1).padStart(2, '0');
+                const dd = String(kstYesterday.getDate()).padStart(2, '0');
                 const dateKey = `${yyyy}-${mm}-${dd}`;
 
                 const docRef = doc(db, 'stores', store.id, 'stats_daily', dateKey);
