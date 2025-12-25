@@ -28,7 +28,6 @@ import ReviewBoardPage from './pages/ReviewBoardPage';
 import { CartProvider } from './contexts/CartContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { StoreProvider, useStore } from './contexts/StoreContext';
-import LandingPage from './pages/LandingPage';
 import TopBar from './components/common/TopBar';
 import AdminOrderAlert from './components/admin/AdminOrderAlert';
 import NicepayReturnPage from './pages/NicepayReturnPage';
@@ -146,7 +145,6 @@ function AppContent() {
           <Route path="/admin/daily-reports" element={<RequireAuth requireAdmin><AdminDailyReportPage /></RequireAuth>} />
           <Route path="/admin/store-settings" element={<RequireAuth requireAdmin><AdminStoreSettings /></RequireAuth>} />
 
-          <Route path="/landing" element={<LandingPage />} />
           <Route path="/store-setup" element={<RequireAuth requireAdmin><StoreSetupWizard /></RequireAuth>} />
         </Routes>
       </div>

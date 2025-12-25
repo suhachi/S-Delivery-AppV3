@@ -108,15 +108,17 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* S-Delivery Series Link */}
-          <div className="mt-8 pt-6 border-t border-gray-100 text-center">
-            <Link
-              to="/landing"
-              className="text-sm text-indigo-600 hover:text-indigo-700 font-medium inline-flex items-center gap-1 group"
-            >
-              Explore S-Delivery Series (V1~V3)
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-            </Link>
+          {/* Sign Up Link */}
+          <div className="mt-6 text-center">
+            <p className="text-gray-600">
+              계정이 없으신가요?{' '}
+              <Link
+                to="/signup"
+                className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
+              >
+                회원가입
+              </Link>
+            </p>
           </div>
         </div>
 
